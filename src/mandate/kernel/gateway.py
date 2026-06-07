@@ -227,7 +227,9 @@ class SyscallGateway:
         """`approval.request` — record a pending human decision for an action."""
         if self.killed:
             return self._killed_result("approval.request", action, {}, [])
-        self.budget.charge(steps=1)
+        charge = self.budget.charge(steps=1)
+        if charge.exceeded:
+            return self._budget_exceeded("approval.request", action, {}, [], charge)
         self.pending_approvals.append({"action": action, "context": dict(context or {})})
         return self._finish(
             "approval.request", action, Decision.REQUIRE_HUMAN_APPROVAL,
@@ -335,8 +337,15 @@ class SyscallGateway:
         message: str,
         detail: dict[str, Any] | None = None,
     ) -> SyscallResult:
-        """Refuse a call that lacks authority (charges the step it consumed)."""
-        self.budget.charge(steps=1)
+        """Refuse a call that lacks authority (charges the step it consumed).
+
+        Even an unauthorized call consumes a metered step, so if that step trips the
+        budget the kill switch fires here too — denied calls cannot be used to spam the
+        syscall boundary indefinitely under a step ceiling.
+        """
+        charge = self.budget.charge(steps=1)
+        if charge.exceeded:
+            return self._budget_exceeded(syscall, action, resource, data_labels, charge)
         return self._finish(
             syscall, action, Decision.DENY, "denied", None, 0.0, resource, data_labels,
             message=message, detail=detail,

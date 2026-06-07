@@ -101,6 +101,23 @@ def test_authorizes_open_dimension_allows_any_value():
     assert c.authorizes("github.repo.write", {"repos": ["acme/research"], "branch": "main"})
 
 
+def test_branch_scope_is_enforced_against_a_singular_branch_key():
+    # Regression: a capability scoped to branches=[main] must NOT authorize a call that
+    # names branch="feature/x" just because the runtime key is singular.
+    c = cap("github.repo.write", resources={"repos": ["acme/research"]},
+            scope={"branches": ["main"]})
+    assert c.authorizes("github.repo.write", {"repos": ["acme/research"], "branch": "main"})
+    assert not c.authorizes(
+        "github.repo.write", {"repos": ["acme/research"], "branch": "feature/x"}
+    )
+
+
+def test_resource_identity_matches_singular_or_plural_key():
+    c = cap("github.repo.read", resources={"repos": ["acme/research"]})
+    assert c.authorizes("github.repo.read", {"repo": "acme/research"})  # singular key
+    assert not c.authorizes("github.repo.read", {"repo": "acme/other"})
+
+
 # -- sensitivity --------------------------------------------------------------
 
 

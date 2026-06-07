@@ -68,6 +68,47 @@ def _dimension_meet(a_value: Any, b_value: Any) -> Any:
     return sorted(_as_set(a_value) & _as_set(b_value))
 
 
+_MISSING = object()
+
+
+def _candidate_keys(dim: str) -> list[str]:
+    """Morphological variants of a dimension key (``branches`` ↔ ``branch``, etc.).
+
+    Capability dimensions are typically plural (``repos``, ``branches``) while a syscall
+    usually names a single resource (``repo``, ``branch``). We try the exact key, common
+    singular forms, and the plural forms so the two always meet.
+    """
+    keys: list[str] = []
+
+    def add(key: str) -> None:
+        if key and key not in keys:
+            keys.append(key)
+
+    add(dim)
+    if dim.endswith("ies"):
+        add(dim[:-3] + "y")  # categories -> category
+    if dim.endswith("es"):
+        add(dim[:-2])  # branches -> branch
+    if dim.endswith("s"):
+        add(dim[:-1])  # repos -> repo
+    add(dim + "s")
+    add(dim + "es")
+    return keys
+
+
+def _resource_value(resource: dict[str, Any], dim: str) -> Any:
+    """Find the runtime value for a capability dimension, tolerating singular/plural.
+
+    Returns ``_MISSING`` when the caller specified nothing for this dimension, so a
+    branch-scoped capability is actually enforced against a call that passes ``branch``
+    rather than silently skipping the check because the key form didn't match.
+    """
+    for key in _candidate_keys(dim):
+        if key in resource:
+            return resource[key]
+    return _MISSING
+
+
 @dataclass(frozen=True)
 class Capability:
     """A static grant of authority: ``provider.resource.action`` + scope + expiry."""
@@ -181,14 +222,16 @@ class Capability:
         for dim, allowed in self.resources.items():
             if allowed is None:
                 continue
-            if dim not in resource:
+            value = _resource_value(resource, dim)
+            if value is _MISSING:
                 return False
-            if not _dimension_subset(resource[dim], allowed):
+            if not _dimension_subset(value, allowed):
                 return False
         for dim, allowed in self.scope.items():
             if allowed is None:
                 continue
-            if dim in resource and not _dimension_subset(resource[dim], allowed):
+            value = _resource_value(resource, dim)
+            if value is not _MISSING and not _dimension_subset(value, allowed):
                 return False
         return True
 

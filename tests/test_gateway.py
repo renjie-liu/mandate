@@ -125,6 +125,27 @@ def test_budget_escalate_mode_requires_budget_increase():
     assert not gw.killed
 
 
+def test_denied_calls_still_trip_the_kill_switch():
+    # Regression: an unauthorized call consumes a step, so under a zero step budget the
+    # kill switch must fire — denied-call spam cannot bypass the budget.
+    bundle = build_bundle()
+    zero = replace(bundle, budget=replace(bundle.budget, max_steps_per_run=0))
+    gw, agent = fresh(zero)
+    res = agent.tool_call("github.repo.read", "github_repo_read", {},
+                          resource={"repos": ["acme/secret"]})  # unauthorized
+    assert gw.killed
+    assert res.status == "killed"
+
+
+def test_approval_requests_trip_the_kill_switch():
+    bundle = build_bundle()
+    zero = replace(bundle, budget=replace(bundle.budget, max_steps_per_run=0))
+    gw, agent = fresh(zero)
+    res = agent.approval_request("payment.send", {"amount": 1})
+    assert gw.killed
+    assert res.status == "killed"
+
+
 def test_control_plane_run_kill():
     gw, agent = fresh()
     gw.run_kill("operator stop")
