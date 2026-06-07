@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 from mandate.demo import DEMO_SECRET_VALUE, DEMO_VAULT, build_bundle, build_tools
-from mandate.kernel import KernelService, SyscallGateway
+from mandate.kernel import KernelService, SyscallGateway, Tool
 from mandate.model import Decision
 
 
@@ -12,6 +12,28 @@ def fresh(bundle=None):
     service = KernelService(SyscallGateway(bundle, tools=build_tools(), vault=DEMO_VAULT))
     # The operator holds the gateway; the agent gets only a channel-bound client.
     return service.gateway, service.client()
+
+
+def _raising_tool(args, **kw):
+    raise RuntimeError("driver failure after partial work")
+
+
+def test_authorized_tool_exception_is_charged_and_audited():
+    # "charged and audited" admits no exception: an authorized tool that raises after being
+    # charged must still produce an audit event, not vanish.
+    tools = build_tools()
+    tools.register(Tool("boom_read", "github.repo.read", cost_usd=0.002, fn=_raising_tool))
+    gw = SyscallGateway(build_bundle(), tools=tools, vault=DEMO_VAULT)
+    service = KernelService(gw)
+    agent = service.client()
+    res = agent.tool_call(
+        "github.repo.read", "boom_read", {}, resource={"repos": ["acme/research"]}
+    )
+    assert res.status == "error" and res.blocked
+    assert len(gw.audit) == 1
+    last = gw.audit.events[-1]
+    assert last.status == "error" and last.cost_usd == 0.002
+    assert gw.audit.verify()
 
 
 def test_read_is_allowed_charged_and_audited():

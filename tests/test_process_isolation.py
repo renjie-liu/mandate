@@ -30,6 +30,18 @@ def _tiny_budget_gateway():
     return SyscallGateway(bundle, tools=build_tools(), vault=DEMO_VAULT)
 
 
+def _raising_tool(args, **kw):
+    raise RuntimeError("driver failure across the boundary")
+
+
+def _raising_tool_gateway():
+    from mandate.kernel import Tool
+
+    tools = build_tools()  # keeps the real github_repo_read alongside the raising one
+    tools.register(Tool("boom_read", "github.repo.read", cost_usd=0.002, fn=_raising_tool))
+    return SyscallGateway(build_bundle(), tools=tools, vault=DEMO_VAULT)
+
+
 def test_kernel_runs_in_a_separate_process():
     import os
 
@@ -129,6 +141,25 @@ def test_malformed_agent_frame_does_not_crash_the_kernel():
         assert "malformed payload" in reply.message
         assert service._proc.is_alive()
         # The kernel still serves a normal call.
+        ok = agent.tool_call(
+            "github.repo.read", "github_repo_read", {}, resource={"repos": ["acme/research"]}
+        )
+        assert ok.status == "ok"
+
+
+def test_tool_exception_is_audited_across_the_boundary():
+    # An authorized tool that raises is charged-and-audited in the kernel process; the agent
+    # sees an error result and the operator's audit (over the control pipe) records it.
+    with ProcessKernelService(_raising_tool_gateway) as service:
+        agent = service.client()
+        res = agent.tool_call(
+            "github.repo.read", "boom_read", {}, resource={"repos": ["acme/research"]}
+        )
+        assert res.status == "error"
+        events = service.audit_events()
+        assert events and events[-1].status == "error" and events[-1].cost_usd == 0.002
+        assert service._proc.is_alive()
+        # The kernel keeps serving; a healthy read tool still works.
         ok = agent.tool_call(
             "github.repo.read", "github_repo_read", {}, resource={"repos": ["acme/research"]}
         )

@@ -21,6 +21,7 @@ _STATUS_GLYPH = {
     "held_for_review": "held",
     "pending_approval": "approval",
     "killed": "KILLED",
+    "error": "ERROR",
 }
 
 

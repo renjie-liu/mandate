@@ -150,6 +150,14 @@ class SyscallGateway:
                 "tool.call", capability, decision, "blocked", None, tool.cost_usd, resource,
                 data_labels, message=str(exc), detail={"tool": name, "egress_blocked": True},
             )
+        except Exception as exc:
+            # An authorized tool was charged and then failed. The syscall must still be
+            # audited — "charged and audited" admits no exception, including a buggy driver.
+            return self._finish(
+                "tool.call", capability, decision, "error", None, tool.cost_usd, resource,
+                data_labels, message=f"tool {name!r} failed: {exc}",
+                detail={"tool": name, "error": type(exc).__name__},
+            )
 
         status = "draft" if decision.is_draft else "ok"
         message = "drafted; nothing shipped" if decision.is_draft else "executed"
@@ -207,6 +215,13 @@ class SyscallGateway:
             return self._finish(
                 "memory.write", "memory.write", decision, "rejected", None, 0.0, resource,
                 data_labels, message=str(exc), detail={"reason": "missing_provenance"},
+            )
+        except Exception as exc:
+            # A memory-backend error is still a charged syscall — audit it, don't propagate.
+            return self._finish(
+                "memory.write", "memory.write", decision, "error", None, 0.0, resource,
+                data_labels, message=f"memory write failed: {exc}",
+                detail={"error": type(exc).__name__},
             )
 
         if record.status == "held_for_review":

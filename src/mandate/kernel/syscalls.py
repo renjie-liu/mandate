@@ -20,7 +20,7 @@ class SyscallResult:
 
     syscall: str  # e.g. "tool.call", "memory.write", "approval.request"
     status: str  # ok | draft | denied | blocked | rejected | held_for_review |
-    #              pending_approval | killed
+    #              pending_approval | killed | error
     decision: Decision | None = None
     result: Any = None  # tool/memory payload — never a secret
     cost_usd: float = 0.0
@@ -35,8 +35,8 @@ class SyscallResult:
 
     @property
     def blocked(self) -> bool:
-        """True when the kernel refused or gated the effect."""
-        return self.status in {"denied", "blocked", "rejected", "killed"}
+        """True when the kernel refused, gated, or failed the effect."""
+        return self.status in {"denied", "blocked", "rejected", "killed", "error"}
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
         mode = f" [{self.decision}]" if self.decision else ""
