@@ -115,16 +115,29 @@ effective = image.constraints ⊓ deployment.grants ⊓ org.policy ⊓ runtime.q
 | [`agent-compose.yaml`](./examples/research-assistant/agent-compose.yaml) | `AgentDeployment` | installer | grants, identity bindings, budget, memory volume, concrete model. **Private. Installing = granting.** |
 | [`org-policy.yaml`](./examples/research-assistant/org-policy.yaml) | `OrgPolicy` | org admin | tenant-wide guardrails (deny/approval/limits). |
 
-## What we build vs reuse
+## Existing Building Blocks
 
-Reuse, don't reinvent: **durable execution** (Temporal / Restate) as scheduler + journal,
-**sandbox** (E2B / Firecracker, gVisor) for isolation, **credential broker**
-(Infisical Agent Vault) so the agent never sees secrets, **memory backend** (mem0 / Letta)
-behind our permission layer.
+Most of the substrate exists. The missing piece is not another agent framework; it is the
+shared identity, authority, and audit boundary that ties these blocks together. Mandate
+should treat existing projects as drivers or substrates, then own the compiler and
+no-bypass syscall gateway.
 
-Build (the wedge): the **manifest compiler**, the **capability runtime + syscall gateway**,
-**capability-decision audit/replay**, and — later — the **identity-as-citizen wallet** and
-**cross-layer fork**. Full mapping in the [contract](./docs/mandate-kernel-contract-v0.2.md#13-build-vs-buy-corrected).
+| Layer | Use / wrap | Why | Mandate owns |
+|---|---|---|---|
+| Manifest authoring | [Docker Agent](https://docs.docker.com/ai/cagent/), [Agent Format](https://agentformat.org/), Agent Spec-style schemas | Agent definitions are already converging on declarative manifests. | The compile step from manifest source into enforceable capability bundles. |
+| Tool ecosystem | [MCP](https://modelcontextprotocol.io/docs/learn/server-concepts), Docker MCP catalog/gateway | MCP is the driver model for tools, resources, and prompts. | Tool admission, capability binding, and syscall mediation. MCP servers are packages, not the security boundary. |
+| Durable execution | [Temporal](https://temporal.io/), [Restate](https://docs.restate.dev/concepts/durable_execution/), [DBOS](https://docs.dbos.dev/) | Long-running agents need scheduler, journal, retries, pause/resume, and human waits. | The agent syscall journal, replay semantics, budget kill switch, and fork/snapshot contract. |
+| Agent loop / graph | [LangGraph](https://langgraphjs.guide/persistence/) or similar graph runtimes | Useful for planning graphs, node checkpointing, and local agent control flow. | The kernel remains outside the loop; graph state is not the source of authority. |
+| Sandbox / isolation | [E2B](https://www.e2b.dev/docs), [Firecracker](https://github.com/firecracker-microvm/firecracker), gVisor-style isolation | Code tools and untrusted execution need a real boundary, not SDK cooperation. | Deny-by-default egress, subject-scoped mounts, and the proof that side effects cannot bypass syscalls. |
+| Credential broker / keychain | [Infisical Agent Vault](https://docs.agent-vault.dev/), [Vault](https://developer.hashicorp.com/vault/docs), [Auth0 Token Vault](https://auth0.com/features/token-vault) | Agents and tool servers should receive credential handles or brokered injection, not plaintext secrets. | Capability-scoped secret leases, server-side injection, revocation, and audit. |
+| Memory backend | [Letta / MemGPT-style memory](https://docs.letta.com/concepts/memory-management), [mem0](https://docs.mem0.ai/) | Existing systems cover long-term memory, recall, and context management patterns. | Per-agent memory namespaces, permissioned reads/writes, provenance, source-trust, retention, deletion, and snapshot/fork semantics. |
+| Policy engine | [Cedar](https://docs.cedarpolicy.com/), [OPA/Rego](https://www.openpolicyagent.org/docs/latest), [Microsoft Agent Governance Toolkit](https://microsoft.github.io/agent-governance-toolkit/packages/agent-os/) | Good engines exist for evaluating policy over structured input. | Capability grammar, policy-to-execution-mode decisions, and enforcement at the no-bypass runtime boundary. |
+| Observability | [OpenTelemetry](https://opentelemetry.io/docs/) plus durable workflow history | Traces, logs, and metrics are commodity plumbing. | Capability-decision audit, explainability, replay, and incident reconstruction under one `AgentKernelSubject`. |
+| Identity-as-citizen resources | [Twilio](https://www.twilio.com/docs/sms), [SendGrid](https://sendgrid.com/en-us/solutions/email-api), [Stripe Issuing](https://stripe.com/issuing), [Lithic](https://docs.lithic.com/docs) | Email, phone, and spend can be built from existing APIs. | Agent-scoped inboxes, contact channels, virtual cards, spend limits, approvals, and revocation. Build later, not P0. |
+
+The near-term wedge is therefore small and sharp: build the **manifest compiler**,
+**capability runtime + syscall gateway**, and **capability-decision audit/replay**; reuse
+the rest behind that boundary. Full mapping in the [contract](./docs/mandate-kernel-contract-v0.2.md#13-build-vs-buy-corrected).
 
 ## Repo structure
 
