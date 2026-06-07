@@ -1,26 +1,29 @@
 """The syscall transport — the agent/kernel boundary made concrete (contract §2).
 
-The agent-facing client must not merely *avoid an attribute* that points at the kernel;
-it must hold **no reference to the gateway at all**, or the no-bypass claim is only as
-strong as Python's (non-existent) privacy. So the agent talks to the kernel the way it
-will in production: by putting plain-data syscall *messages* on a channel and reading
-plain-data results back. The gateway lives on the far side.
+The agent must reach the kernel only by sending plain-data syscall *messages* and
+receiving a result the **kernel** produced. Two things follow, and this module enforces
+both with the *shape* of what each side holds:
 
-In production the two sides are different processes (the agent inside the sandbox); here
-a worker thread stands in for that boundary. Either way, walking the agent's object
-graph never reaches the gateway, the broker, or the secret vault — only queues of data.
+1. **No reference to the kernel.** The agent end holds only a request queue, never the
+   gateway/broker/budget/vault — so no walk of the agent's object graph reaches a
+   subsystem. (Whole-interpreter introspection — ``gc.get_objects()`` — can still
+   enumerate anything in one process; removing *that* is the sandbox's job, which P0
+   simulates with a worker thread standing in for the process boundary.)
 
-(Whole-heap introspection — ``gc.get_objects()`` — can still enumerate any object in a
-shared interpreter. That is exactly what process/sandbox isolation removes, and is out of
-scope for the in-process P0 simulation; it is the sandbox's job, not the SDK's.)
+2. **No way to forge a response.** The channel is split into an :class:`AgentEndpoint`
+   and a :class:`KernelEndpoint`. The agent end can submit a request and block for *its
+   own* reply, delivered through a fresh per-call reply box; there is **no shared response
+   store and no response-posting method on the agent's object**, so it cannot pre-seed or
+   overwrite what a call returns. (A clean-ABI guarantee, not a hard boundary: in one
+   interpreter the agent can always fabricate a ``SyscallResult`` value — but that is not a
+   syscall and causes nothing, because every real effect happens on the kernel side.)
 """
 
 from __future__ import annotations
 
-import itertools
 import queue
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..errors import MandateError
@@ -30,71 +33,72 @@ if TYPE_CHECKING:  # keep the gateway type out of this module's runtime globals
     from .gateway import SyscallGateway
 
 _DEFAULT_TIMEOUT = 15.0
+_STOP = object()
 
 
 @dataclass
 class _Request:
-    rid: int
+    """One in-flight syscall: plain-data message + a private box for its reply."""
+
     syscall: str
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any]
+    reply: "queue.Queue[SyscallResult]"
 
 
-_STOP = object()
+class AgentEndpoint:
+    """The agent-held end of the channel: submit a request, await your own reply.
 
-
-class SyscallChannel:
-    """A data-only transport. The agent end references queues of messages, never a kernel.
-
-    All state here is plain data: an inbound request queue, an outbound response map, a
-    condition variable, and an id counter. Nothing on this object refers to the gateway,
-    so an agent that holds (only) this cannot walk its way to a subsystem.
+    Holds only the shared request queue. Each :meth:`send` creates a *local* one-shot
+    reply box (not an attribute, not a shared map) that the kernel fills; there is no
+    ``_responses`` store and no ``respond`` method here, so a denied call cannot be turned
+    into a forged ``ok`` by anything reachable on this object.
     """
 
-    def __init__(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
+    def __init__(self, requests: "queue.Queue[Any]", timeout: float = _DEFAULT_TIMEOUT) -> None:
+        self._requests = requests
         self._timeout = timeout
-        self._requests: "queue.Queue[Any]" = queue.Queue()
-        self._responses: dict[int, SyscallResult] = {}
-        self._cond = threading.Condition()
-        self._ids = itertools.count()
-
-    # -- agent side ------------------------------------------------------------
 
     def send(self, syscall: str, payload: dict[str, Any]) -> SyscallResult:
-        """Submit one syscall message and block for its result."""
-        rid = next(self._ids)
-        self._requests.put(_Request(rid, syscall, payload))
-        with self._cond:
-            ready = self._cond.wait_for(
-                lambda: rid in self._responses, timeout=self._timeout
-            )
-            if not ready:
-                raise MandateError("syscall channel timed out waiting for the kernel")
-            return self._responses.pop(rid)
+        reply: "queue.Queue[SyscallResult]" = queue.Queue(maxsize=1)
+        self._requests.put(_Request(syscall, dict(payload), reply))
+        try:
+            return reply.get(timeout=self._timeout)
+        except queue.Empty as exc:
+            raise MandateError("syscall channel timed out waiting for the kernel") from exc
 
-    # -- kernel side (used only by the worker, never by the agent) -------------
 
-    def _next_request(self) -> Any:
+class KernelEndpoint:
+    """The kernel-held end: receive requests, and a stop signal for shutdown."""
+
+    def __init__(self, requests: "queue.Queue[Any]") -> None:
+        self._requests = requests
+
+    def receive(self) -> Any:
         return self._requests.get()
 
-    def _put_response(self, rid: int, response: SyscallResult) -> None:
-        with self._cond:
-            self._responses[rid] = response
-            self._cond.notify_all()
-
-    def _stop(self) -> None:
+    def stop(self) -> None:
         self._requests.put(_STOP)
 
 
-class KernelWorker:
-    """Drains the channel and dispatches each message to the gateway, on its own thread.
+def make_channel(
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> tuple[AgentEndpoint, KernelEndpoint]:
+    """Create a connected (agent, kernel) endpoint pair over one request queue."""
+    requests: "queue.Queue[Any]" = queue.Queue()
+    return AgentEndpoint(requests, timeout=timeout), KernelEndpoint(requests)
 
-    The worker references the gateway; the channel does not, and the agent references
-    only the channel — so the gateway is reachable from the kernel side alone.
+
+class KernelWorker:
+    """Drains the kernel endpoint and dispatches each message to the gateway, on a thread.
+
+    The worker references the gateway and replies through each request's private box; the
+    agent endpoint references neither, so the gateway is reachable from the kernel side
+    alone and responses originate only here.
     """
 
-    def __init__(self, gateway: "SyscallGateway", channel: SyscallChannel) -> None:
+    def __init__(self, gateway: "SyscallGateway", endpoint: KernelEndpoint) -> None:
         self._gateway = gateway
-        self._channel = channel
+        self._endpoint = endpoint
         self._thread = threading.Thread(target=self._loop, name="mandate-kernel", daemon=True)
 
     def start(self) -> "KernelWorker":
@@ -102,21 +106,21 @@ class KernelWorker:
         return self
 
     def stop(self) -> None:
-        self._channel._stop()
+        self._endpoint.stop()
         self._thread.join(timeout=2.0)
 
     def _loop(self) -> None:
         while True:
-            req = self._channel._next_request()
+            req = self._endpoint.receive()
             if req is _STOP:
                 return
             try:
-                response = self._dispatch(req)
+                result = self._dispatch(req)
             except Exception as exc:  # never leave the agent blocked on a dead worker
-                response = SyscallResult(
+                result = SyscallResult(
                     syscall=req.syscall, status="denied", message=f"kernel error: {exc}"
                 )
-            self._channel._put_response(req.rid, response)
+            req.reply.put(result)
 
     def _dispatch(self, req: _Request) -> SyscallResult:
         g, p = self._gateway, req.payload
@@ -138,17 +142,17 @@ class KernelWorker:
 
 
 class KernelService:
-    """Runs a gateway behind a :class:`SyscallChannel` and hands out agent clients.
+    """Runs a gateway behind a channel and hands out agent clients.
 
     The *operator* holds the service (and through it the gateway, audit log, budget); the
-    *agent* is handed only a client bound to the channel. Use as a context manager, or
-    call :meth:`shutdown` to stop the worker.
+    *agent* is handed only a client bound to the agent endpoint. Use as a context manager,
+    or call :meth:`shutdown` to stop the worker.
     """
 
     def __init__(self, gateway: "SyscallGateway", *, timeout: float = _DEFAULT_TIMEOUT) -> None:
         self._gateway = gateway
-        self._channel = SyscallChannel(timeout=timeout)
-        self._worker = KernelWorker(gateway, self._channel).start()
+        self._agent_endpoint, kernel_endpoint = make_channel(timeout=timeout)
+        self._worker = KernelWorker(gateway, kernel_endpoint).start()
 
     @property
     def gateway(self) -> "SyscallGateway":
@@ -158,7 +162,7 @@ class KernelService:
         """Return a fresh agent client that can reach the kernel only via the channel."""
         from ..sdk.client import AgentClient  # lazy: avoids a kernel↔sdk import cycle
 
-        return AgentClient(self._channel, self._gateway.subject)
+        return AgentClient(self._agent_endpoint, self._gateway.subject)
 
     def shutdown(self) -> None:
         self._worker.stop()

@@ -46,13 +46,14 @@ sees plaintext), and every side-effecting path is a syscall. A prompt-injected a
 *request* anything; it can only *act* through the kernel. This is the difference between
 Mandate and a cooperative SDK wrapper, and it is what the P0 demo proves adversarially.
 
-The agent talks to the kernel over a **data-only syscall channel** — it holds no
-reference to the gateway, broker, budget, or secret vault, only a message transport, so
-there is no reference-graph path from agent code into a subsystem. The hard isolation
+The agent talks to the kernel over a **data-only syscall channel** with split
+agent/kernel endpoints: the agent end holds no reference to the gateway, broker, budget,
+or secret vault (so no reference-graph path reaches a subsystem), and it has no response
+store to pre-seed — a call's result comes only from the kernel. The hard isolation
 boundary is the sandbox/process line (in production the agent runs *inside* the sandbox);
 P0 runs in one process and simulates that line, so it does not claim to defeat
-whole-interpreter introspection (`gc.get_objects()`) — that is precisely the sandbox's
-job, not the SDK's.
+whole-interpreter introspection (`gc.get_objects()`) or the fact that the agent can
+fabricate inert data objects — that residue is precisely the sandbox's job, not the SDK's.
 
 ## How it compiles
 

@@ -15,7 +15,8 @@ import gc
 import types
 
 from mandate.demo import DEMO_SECRET_VALUE, build_bundle, build_tools
-from mandate.kernel import KernelService, SyscallGateway
+from mandate.kernel import KernelService, SyscallGateway, SyscallResult
+from mandate.model import Decision
 from mandate.sdk import AgentClient
 
 
@@ -108,3 +109,39 @@ def test_client_constructed_only_from_a_channel_and_subject():
     varnames = AgentClient.__init__.__code__.co_varnames
     assert "channel" in varnames and "subject" in varnames
     assert "gateway" not in varnames
+
+
+def test_agent_endpoint_exposes_no_response_machinery():
+    _, agent = agent_for()
+    endpoint = agent._channel
+    # The kernel-side response store and mutator simply do not exist on the agent's end.
+    assert not hasattr(endpoint, "_responses")
+    assert not hasattr(endpoint, "_put_response")
+    # Its only public verb is send().
+    assert {n for n in dir(endpoint) if not n.startswith("_")} == {"send"}
+
+
+def test_agent_cannot_forge_a_syscall_response():
+    # Reproduces the review exploit: there is no shared response store to pre-seed a forged
+    # "ok" for a call the gateway will deny. The result is the gateway's real verdict, and
+    # the kernel audits the real (denied) call — effects stay kernel-mediated.
+    gw, agent = agent_for()
+    endpoint = agent._channel
+    for attr in ("_responses", "_put_response"):
+        assert not hasattr(endpoint, attr)
+    res = agent.tool_call("payment.send", "nope", resource={})
+    assert res.status == "denied"
+    assert res.decision is Decision.DENY
+    assert gw.audit.events[-1].status == "denied"
+
+
+def test_fabricated_result_objects_are_inert():
+    # The agent can always build a SyscallResult value in-process; doing so is not a syscall
+    # and changes nothing external. The only path to an effect is the gateway.
+    gw, agent = agent_for()
+    forged = SyscallResult(syscall="tool.call", status="ok", decision=Decision.ALLOW)
+    assert forged.status == "ok"  # the agent can fabricate this freely — and it is inert
+    before = len(gw.audit)
+    agent.tool_call("payment.send", "nope", resource={})  # real call → denied + audited
+    assert len(gw.audit) == before + 1
+    assert gw.audit.events[-1].status == "denied"
