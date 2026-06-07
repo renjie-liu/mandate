@@ -17,6 +17,7 @@ second path. That is INV-1.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from ..compiler.bundle import CapabilityBundle
@@ -31,6 +32,21 @@ from .memory import MemoryStore
 from .policy_engine import PolicyEngine
 from .syscalls import SyscallResult
 from .tools import Tool, ToolRegistry
+
+
+def _json_safe(value: Any) -> tuple[Any, bool]:
+    """Return ``(value, True)`` if JSON-serializable, else a safe placeholder + ``False``.
+
+    Tool results cross the syscall boundary and are part of the audit/replay record, so they
+    must be plain data. A non-serializable result is replaced here (in the kernel) with a
+    typed placeholder rather than being allowed to leak as a live object or to desync the
+    audited status from what the agent observes.
+    """
+    try:
+        json.dumps(value)
+        return value, True
+    except (TypeError, ValueError):
+        return {"_unserializable": type(value).__name__}, False
 
 
 class SyscallGateway:
@@ -388,7 +404,19 @@ class SyscallGateway:
         message: str = "",
         detail: dict[str, Any] | None = None,
     ) -> SyscallResult:
-        """Append the audit event for a completed syscall and return its result."""
+        """Append the audit event for a completed syscall and return its result.
+
+        The result is normalized to be JSON-serializable *before* the audit is written, so
+        the audit status and the status the agent observes can never disagree: a tool that
+        produced a non-serializable result is still recorded at this status (the effect did
+        happen), with the un-serializable result flagged here rather than silently flipped
+        to an error by the transport.
+        """
+        detail = dict(detail or {})
+        if result is not None:
+            result, serializable = _json_safe(result)
+            if not serializable:
+                detail["result_unserializable"] = True
         event: AuditEvent = self.audit.append(
             syscall=syscall,
             principal=self.subject.principal,
@@ -398,7 +426,7 @@ class SyscallGateway:
             cost_usd=cost_usd,
             resource=resource,
             data_labels=data_labels,
-            detail=detail or {},
+            detail=detail,
         )
         return SyscallResult(
             syscall=syscall,
@@ -408,5 +436,5 @@ class SyscallGateway:
             cost_usd=cost_usd,
             audit_seq=event.seq,
             message=message,
-            detail=detail or {},
+            detail=detail,
         )

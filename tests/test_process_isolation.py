@@ -233,6 +233,25 @@ def test_hostile_data_labels_are_rejected_at_the_boundary():
         assert service._proc.is_alive()
 
 
+def test_control_pipe_does_not_unpickle_agent_reachable_data():
+    # In the co-located demo topology, agent code can gc-reach the control pipe. It must use
+    # the same safe wire — a pickle bomb on it cannot execute code in the kernel.
+    _clear_marker()
+    try:
+        with ProcessKernelService(build_gateway) as service:
+            ctrl, lock = service._control_conn, service._control_lock
+            with lock:
+                ctrl.send_bytes(pickle.dumps(_Evil()))
+                assert ctrl.poll(5)
+                resp = json.loads(ctrl.recv_bytes().decode("utf-8"))
+            assert resp["status"] == "err"        # rejected as unparseable JSON
+            assert not os.path.exists(_MARKER)     # __reduce__ never ran in the kernel
+            assert service._proc.is_alive()
+            assert isinstance(service.budget_snapshot(), dict)  # control still works
+    finally:
+        _clear_marker()
+
+
 def test_malicious_object_in_args_never_crosses_the_boundary():
     # The reviewer's exact attack path: a malicious object passed through the public API.
     # JSON encoding rejects it in the *agent* process, so it is never serialized or sent.

@@ -18,8 +18,13 @@ chosen by a possibly-compromised agent. Two rules make that safe:
   boundary; the gateway only ever sees well-typed primitives. A malformed frame, an
   oversized frame, or a tool error becomes a denied/error result — never a crash.
 
-The operator's control pipe (audit, budget) is a separate connection the agent never
-holds; both its ends are trusted, so it keeps the convenient pickle codec.
+The operator's control pipe (audit, budget) is a separate connection. It carries the
+**same safe JSON wire** — never pickle — because in a *co-located* deployment (agent and
+operator sharing one process, as in the demo/tests) agent code can ``gc``-reach it; treating
+its bytes as untrusted means even that cannot become code execution. Inspection only ever
+exposes audit / budget / subject — never the vault, which lives only in the kernel process.
+Full agent-process isolation (the agent in its *own* process, holding only the syscall pipe)
+is the P1 sandbox; this module makes every reachable pipe safe regardless.
 """
 
 from __future__ import annotations
@@ -27,10 +32,13 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import threading
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..errors import MandateError
 from ..model import Decision
+from ..model.subject import AgentKernelSubject
+from .audit import AuditEvent
 from .syscalls import SyscallResult
 
 if TYPE_CHECKING:
@@ -115,11 +123,12 @@ def _handle_agent_frame(gateway: "SyscallGateway", raw: bytes) -> SyscallResult:
     return _dispatch(gateway, syscall, payload)
 
 
-def _inspect(gateway: "SyscallGateway", what: str) -> Any:
+def _inspect_json(gateway: "SyscallGateway", what: str) -> Any:
+    """Operator inspection, returned as JSON-able data (never live objects)."""
     if what == "subject":
-        return gateway.subject
+        return gateway.subject.as_dict()
     if what == "audit":
-        return list(gateway.audit.events)
+        return [asdict(event) for event in gateway.audit.events]
     if what == "budget":
         return gateway.budget.snapshot()
     if what == "killed":
@@ -167,20 +176,43 @@ def _serve_agent(gateway: "SyscallGateway", conn) -> bool:
 
 
 def _serve_control(gateway: "SyscallGateway", conn) -> bool:
-    """Operator control channel (trusted). Returns True to stop the kernel process."""
+    """Operator control channel. Returns True to stop the kernel process.
+
+    Uses the *same safe JSON wire as the agent pipe* — never pickle. The control pipe is
+    meant for the operator, but in a co-located deployment (agent + operator in one process)
+    agent code can reach it; treating its bytes as untrusted means even that can't be turned
+    into code execution. Inspection only ever exposes audit/budget/subject — never the vault.
+    """
     try:
-        message = conn.recv()  # operator is trusted; pickle is fine here
+        raw = conn.recv_bytes(_MAX_FRAME)
     except (EOFError, OSError):
         return True  # operator gone → shut down
-    if isinstance(message, tuple) and message:
-        if message[0] == "stop":
+    except Exception:
+        return True
+    try:
+        message = json.loads(raw.decode("utf-8"))
+    except Exception:
+        _safe_send(conn, {"status": "err", "message": "unparseable control frame"})
+        return False
+    if isinstance(message, dict):
+        if message.get("op") == "stop":
             return True
-        if message[0] == "inspect" and len(message) == 2:
+        if message.get("op") == "inspect":
             try:
-                conn.send(("ok", _inspect(gateway, message[1])))
+                payload = {"status": "ok", "value": _inspect_json(gateway, message.get("what"))}
             except Exception as exc:
-                conn.send(("err", str(exc)))
+                payload = {"status": "err", "message": str(exc)}
+            _safe_send(conn, payload)
+            return False
+    _safe_send(conn, {"status": "err", "message": "unknown control frame"})
     return False
+
+
+def _safe_send(conn, payload: dict[str, Any]) -> None:
+    try:
+        conn.send_bytes(json.dumps(payload).encode("utf-8"))
+    except (OSError, ValueError, TypeError):  # pragma: no cover - defensive
+        pass
 
 
 def _safe_close(conn) -> None:
@@ -207,16 +239,14 @@ def _result_to_dict(result: SyscallResult) -> dict[str, Any]:
 
 
 def _encode_result(result: SyscallResult) -> bytes:
+    # The gateway already normalized the result to JSON-safe data before auditing, so this
+    # should always succeed. The fallback keeps the *audited status* intact (it does not
+    # invent an "error") and merely drops an unexpectedly-unserializable result.
     try:
         return json.dumps(_result_to_dict(result)).encode("utf-8")
-    except (TypeError, ValueError):
-        # A tool returned a non-primitive result. Never let it cross as a pickled object
-        # (it could carry live references / secrets) — report a serialization error.
+    except (TypeError, ValueError):  # pragma: no cover - gateway normalizes results
         safe = _result_to_dict(result)
-        safe.update(
-            status="error", result=None, detail={},
-            message="tool result was not JSON-serializable",
-        )
+        safe.update(result=None, detail={"result_unserializable": True})
         return json.dumps(safe).encode("utf-8")
 
 
@@ -234,6 +264,15 @@ def _result_from_dict(data: Any) -> SyscallResult:
         message=str(data.get("message") or ""),
         detail=data.get("detail") if isinstance(data.get("detail"), dict) else {},
     )
+
+
+def _decode_inspect(what: str, value: Any) -> Any:
+    """Reconstruct operator-side objects from a JSON control response."""
+    if what == "subject" and isinstance(value, dict):
+        return AgentKernelSubject(**value)
+    if what == "audit" and isinstance(value, list):
+        return [AuditEvent(**event) for event in value]
+    return value  # budget (dict), killed (bool), dashboard (str)
 
 
 # ---------------------------------------------------------------------------
@@ -282,9 +321,10 @@ class ProcessKernelService:
     """Runs a gateway in a separate process; hands the agent a pipe-bound client.
 
     ``factory`` (with ``args``) is called *inside the child* to build the gateway, so no
-    privileged object is ever constructed in — or pickled into — the agent's process.
-    Operators use the inspection methods (over a private control pipe); the agent gets only
-    :meth:`client`, which can reach the kernel solely by sending JSON syscall frames.
+    privileged object is ever constructed in — or sent to — the agent's process. Operators
+    use the inspection methods (over a control pipe); the agent gets only :meth:`client`,
+    which reaches the kernel solely by sending JSON syscall frames. Both pipes use the same
+    safe JSON wire, so neither can be turned into code execution by agent-reachable code.
     """
 
     def __init__(self, factory: GatewayFactory, args: tuple = (), *, timeout: float = 15.0) -> None:
@@ -302,17 +342,21 @@ class ProcessKernelService:
         self._control_lock = threading.Lock()
         self._subject = self._inspect("subject")
 
-    # -- operator-side inspection (never reachable by the agent) ----------------
+    # -- operator-side inspection (control pipe; same safe JSON wire) ------------
 
     def _inspect(self, what: str) -> Any:
         with self._control_lock:
-            self._control_conn.send(("inspect", what))
+            self._control_conn.send_bytes(
+                json.dumps({"op": "inspect", "what": what}).encode("utf-8")
+            )
             if not self._control_conn.poll(self._timeout):
                 raise MandateError("kernel control channel timed out")
-            status, value = self._control_conn.recv()
-        if status != "ok":
-            raise MandateError(f"kernel inspection failed: {value}")
-        return value
+            raw = self._control_conn.recv_bytes(_MAX_FRAME)
+        message = json.loads(raw.decode("utf-8"))
+        if not isinstance(message, dict) or message.get("status") != "ok":
+            detail = message.get("message") if isinstance(message, dict) else "malformed"
+            raise MandateError(f"kernel inspection failed: {detail}")
+        return _decode_inspect(what, message.get("value"))
 
     @property
     def subject(self):
@@ -347,7 +391,7 @@ class ProcessKernelService:
     def shutdown(self) -> None:
         try:
             with self._control_lock:
-                self._control_conn.send(("stop",))
+                self._control_conn.send_bytes(json.dumps({"op": "stop"}).encode("utf-8"))
         except (OSError, ValueError):
             pass
         self._proc.join(timeout=2.0)

@@ -18,6 +18,30 @@ def _raising_tool(args, **kw):
     raise RuntimeError("driver failure after partial work")
 
 
+class _Unserializable:
+    pass
+
+
+def _unserializable_tool(args, **kw):
+    return _Unserializable()  # not JSON-serializable
+
+
+def test_unserializable_tool_result_stays_consistent_with_its_audit():
+    # A tool that returns a non-serializable result still ran (the effect happened), so the
+    # audit records it at its real status and the agent observes the SAME status — never a
+    # transport-invented "error" that disagrees with the audit.
+    tools = build_tools()
+    tools.register(Tool("weird", "github.repo.read", cost_usd=0.002, fn=_unserializable_tool))
+    gw = SyscallGateway(build_bundle(), tools=tools, vault=DEMO_VAULT)
+    service = KernelService(gw)
+    agent = service.client()
+    res = agent.tool_call("github.repo.read", "weird", {}, resource={"repos": ["acme/research"]})
+    assert res.status == "ok"
+    assert gw.audit.events[-1].status == res.status  # consistent
+    assert gw.audit.events[-1].detail.get("result_unserializable") is True
+    assert res.result == {"_unserializable": "_Unserializable"}  # normalized, not a live object
+
+
 def test_authorized_tool_exception_is_charged_and_audited():
     # "charged and audited" admits no exception: an authorized tool that raises after being
     # charged must still produce an audit event, not vanish.
