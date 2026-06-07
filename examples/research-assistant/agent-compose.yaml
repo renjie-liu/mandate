@@ -12,6 +12,13 @@ agents:
       - capability: github.repo.read
         resources: { repos: [acme/research] }
         expires: 30d
+      - capability: github.repo.write             # ⊆ request; org policy decides how it lands
+        resources: { repos: [acme/research] }
+        expires: 30d
+      - capability: semantic_scholar.search       # the secret-bound tool, granted explicitly
+        expires: 30d
+      - capability: fs.workspace.rw
+        expires: 30d
 
     llm_binding:                                  # image declared a class; deploy picks model
       primary: anthropic/claude-opus-4-x

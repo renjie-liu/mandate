@@ -9,9 +9,12 @@ organization policy into an effective runtime **capability bundle**. Every tool 
 memory operation, credential use, IPC message, and budget charge crosses the same
 **syscall boundary** and is enforced under one agent identity.
 
-> **Status: design stage.** The kernel contract (`v0.2`) is defined and the P0 vertical
-> slice is specified. Implementation has not started — see [`ROADMAP.md`](./ROADMAP.md).
-> Expect the contract to change.
+> **Status: P0 implemented.** The kernel contract (`v0.2`) is defined and the P0 vertical
+> slice is built and tested — the compiler, the syscall gateway, policy execution-modes,
+> the budget kill-switch, the append-only audit log, broker-injected secrets, and
+> deny-by-default egress. Run the adversarial demo with `mandate demo` (see
+> [Quickstart](#quickstart)). See [`ROADMAP.md`](./ROADMAP.md) for what's next. Expect the
+> contract to keep changing.
 
 ---
 
@@ -70,6 +73,30 @@ sees plaintext), and every side-effecting path is a syscall. A prompt-injected a
 *request* anything; it can only *act* through the kernel. This is the difference between
 Mandate and a cooperative SDK wrapper, and it is what the P0 demo proves adversarially.
 
+The agent talks to the kernel over a **data-only syscall channel**, and Mandate ships two
+transports behind it:
+
+- **In-process** (`KernelService`) — convenient for tests/demos. The agent holds no
+  reference to the gateway, broker, budget, or secret vault, so no reference-graph path
+  reaches a subsystem. It is **not** an isolation boundary, though: sharing one interpreter,
+  the agent can forge the result it *observes* (or fabricate a `SyscallResult`). That is
+  **inert** — every real effect is still kernel-mediated and audited, so INV-1 holds — but
+  the observed result isn't guaranteed kernel-sourced.
+- **Process-isolated** (`ProcessKernelService`) — the real boundary (contract §2, §13). The
+  kernel runs in a **separate process**; the agent holds only a pipe, so there is nothing
+  to reach or pre-seed and a result can only be what the kernel sent back. A denied call is
+  observed as denied. **Every** pipe (syscall *and* operator control) carries length-bounded
+  JSON, never pickle, and every frame is schema- and type-validated — so bytes from
+  agent-reachable code can only ever decode to primitive data, never construct an object or
+  run code in the kernel, and a malformed frame returns denied rather than crashing it.
+  Inspection exposes audit/budget/subject only — never the secret vault, which lives solely
+  in the kernel process. Try it with `mandate demo --isolated`; running the agent in its own
+  process (so it can't even reach the control pipe) and a full sandbox (E2B / Firecracker /
+  gVisor) are the P1 hardening.
+
+In short: the SDK shape keeps the kernel unreachable; **isolation is the process/sandbox
+layer's job, not the SDK's** — exactly what the build-vs-buy table says to *use*, not build.
+
 ## How it compiles
 
 ```
@@ -106,22 +133,53 @@ Build (the wedge): the **manifest compiler**, the **capability runtime + syscall
 **capability-decision audit/replay**, and — later — the **identity-as-citizen wallet** and
 **cross-layer fork**. Full mapping in the [contract](./docs/mandate-kernel-contract-v0.2.md#13-build-vs-buy-corrected).
 
+## Quickstart
+
+```bash
+pip install -e ".[dev]"   # runtime dep is just PyYAML; [dev] adds pytest
+
+mandate demo              # run the six adversarial scenarios + audit dashboard
+mandate demo --isolated   # also run the kernel in a separate process (the real boundary)
+mandate compile examples/research-assistant/agent.yaml \
+                examples/research-assistant/agent-compose.yaml \
+                --org-policy examples/research-assistant/org-policy.yaml
+
+pytest                    # compiler · kernel · no-bypass · end-to-end demo
+```
+
+`mandate demo` walks the contract's §14 demo. Each step is a syscall crossing the kernel:
+
+1. read `acme/research` → **allowed**, charged, audited
+2. write to a branch → **draft-only**; write to `main` → **code-owner approval**; nothing ships
+3. semantic-scholar search → API key **broker-injected server-side**, never in the result
+4. under simulated injection, the code tool tries to `curl` an unapproved host → **blocked by egress**
+5. memory write with no provenance → **rejected**; low-trust long-term → **held for review**
+6. over budget → **killed**; every later syscall is refused
+
+The whole run prints as an append-only, hash-chained audit table.
+
 ## Repo structure
 
 ```
 .
-├── README.md
-├── ROADMAP.md
+├── README.md · ROADMAP.md · pyproject.toml
 ├── docs/
 │   └── mandate-kernel-contract-v0.2.md   # the spec / contract
 ├── examples/
 │   └── research-assistant/               # the P0 demo agent
-│       ├── agent.yaml
-│       ├── agent-compose.yaml
-│       └── org-policy.yaml
-├── compiler/                             # (planned) manifest → capability bundle
-├── kernel/                               # (planned) syscall gateway + enforcement
-└── sdk/                                  # (planned) agent-facing syscall client
+│       ├── agent.yaml                    # AgentImage     (author)
+│       ├── agent-compose.yaml            # AgentDeployment (installer)
+│       ├── org-policy.yaml               # OrgPolicy       (org admin)
+│       ├── prompts/researcher.md         # persona (!= principal)
+│       └── demo.py                       # thin runner for the six scenarios
+├── src/mandate/
+│   ├── model/                            # capability algebra + manifest model
+│   ├── compiler/                         # manifests → effective capability bundle
+│   ├── kernel/                           # syscall gateway + enforcement subsystems
+│   ├── sdk/                              # agent-facing syscall client (the only way to act)
+│   ├── demo.py · dashboard.py · cli.py   # reference demo, audit view, `mandate` CLI
+│   └── errors.py
+└── tests/                                # pytest suite incl. an explicit no-bypass test
 ```
 
 ## License
