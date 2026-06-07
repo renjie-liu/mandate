@@ -131,13 +131,39 @@ no-bypass syscall gateway.
 | Sandbox / isolation | [E2B](https://www.e2b.dev/docs), [Firecracker](https://github.com/firecracker-microvm/firecracker), gVisor-style isolation | Code tools and untrusted execution need a real boundary, not SDK cooperation. | Deny-by-default egress, subject-scoped mounts, and the proof that side effects cannot bypass syscalls. |
 | Credential broker / keychain | [Infisical Agent Vault](https://docs.agent-vault.dev/), [Vault](https://developer.hashicorp.com/vault/docs), [Auth0 Token Vault](https://auth0.com/features/token-vault) | Agents and tool servers should receive credential handles or brokered injection, not plaintext secrets. | Capability-scoped secret leases, server-side injection, revocation, and audit. |
 | Memory backend | [Letta / MemGPT-style memory](https://docs.letta.com/concepts/memory-management), [mem0](https://docs.mem0.ai/) | Existing systems cover long-term memory, recall, and context management patterns. | Per-agent memory namespaces, permissioned reads/writes, provenance, source-trust, retention, deletion, and snapshot/fork semantics. |
-| Policy engine | [Cedar](https://docs.cedarpolicy.com/), [OPA/Rego](https://www.openpolicyagent.org/docs/latest), [Microsoft Agent Governance Toolkit](https://microsoft.github.io/agent-governance-toolkit/packages/agent-os/) | Good engines exist for evaluating policy over structured input. | Capability grammar, policy-to-execution-mode decisions, and enforcement at the no-bypass runtime boundary. |
+| Policy engine | [Cedar](https://docs.cedarpolicy.com/), [OPA/Rego](https://www.openpolicyagent.org/docs/latest), [Microsoft Agent Governance Toolkit](https://microsoft.github.io/agent-governance-toolkit/packages/), [ACS](https://microsoft.github.io/agent-governance-toolkit/packages/agent-control-specification/) | Good engines exist for evaluating policy over structured input and returning normalized verdicts. | Capability grammar, policy-to-execution-mode decisions, and enforcement at the no-bypass runtime boundary. |
 | Observability | [OpenTelemetry](https://opentelemetry.io/docs/) plus durable workflow history | Traces, logs, and metrics are commodity plumbing. | Capability-decision audit, explainability, replay, and incident reconstruction under one `AgentKernelSubject`. |
 | Identity-as-citizen resources | [Twilio](https://www.twilio.com/docs/sms), [SendGrid](https://sendgrid.com/en-us/solutions/email-api), [Stripe Issuing](https://stripe.com/issuing), [Lithic](https://docs.lithic.com/docs) | Email, phone, and spend can be built from existing APIs. | Agent-scoped inboxes, contact channels, virtual cards, spend limits, approvals, and revocation. Build later, not P0. |
 
 The near-term wedge is therefore small and sharp: build the **manifest compiler**,
 **capability runtime + syscall gateway**, and **capability-decision audit/replay**; reuse
 the rest behind that boundary. Full mapping in the [contract](./docs/mandate-kernel-contract-v0.2.md#13-build-vs-buy-corrected).
+
+## Market Difference
+
+Mandate is not trying to replace every adjacent agent project. It is the common authority
+boundary those projects need when an agent becomes long-running, delegated, and
+side-effecting.
+
+| Category | What exists | Mandate difference |
+|---|---|---|
+| Agent frameworks | LangGraph, CrewAI, AutoGen, OpenAI Agents SDK, and similar runtimes build loops, graphs, tools, and planning flows. | Mandate sits under the loop. Framework state is useful execution state, but it is not the source of authority. |
+| Agent manifests | Docker Agent, Agent Format, and Agent Spec-style schemas make agents portable and declarative. | Mandate compiles manifest source, deployment grants, org policy, and runtime quota into an effective capability bundle. |
+| MCP and tool gateways | MCP standardizes tool servers, resources, prompts, and client/server transport. Tool platforms such as Composio or Arcade help connect SaaS APIs. | Mandate treats tools as drivers. Admission, permission, secret injection, budget, egress, and audit still happen at the syscall boundary. |
+| Governance middleware | Microsoft AGT Agent OS and ACS validate the market: policy verdicts, adapters, lifecycle controls, telemetry, approvals, and compliance mapping all matter. | Mandate can use AGT/ACS-style verdicts, but does not stop at app-level middleware. The kernel owns the host boundary that actually enforces verdicts. |
+| Sandboxes and durable engines | E2B, Firecracker, gVisor-style isolation, Temporal, Restate, and DBOS can run code and keep workflows alive. | Mandate binds those substrates to one `AgentKernelSubject`, one capability bundle, one budget kill switch, and one replayable syscall journal. |
+| Memory and secret systems | Letta/mem0-style memory systems recall context; Vault-style systems store credentials. | Mandate makes memory and secrets agent-native resources: scoped, permissioned, revocable, provenance-aware, and audited per tenant/session. |
+
+The sharp positioning is: **Mandate is the no-bypass capability kernel underneath agent
+manifests, frameworks, MCP servers, policy engines, sandboxes, memory systems, and
+vaults.** Existing systems can be reused as engines or adapters; Mandate owns the
+authority boundary, capability compiler, and audit subject.
+
+The closest adjacent market signal is Microsoft AGT: it shows demand for agent
+governance, policy verdicts, framework adapters, runtime controls, and compliance
+evidence. Mandate's bet is lower in the stack. Policy verdicts are necessary, but the
+hard part is making every side effect pass through the same enforced subject boundary.
+That is the part Mandate should own.
 
 ## Repo structure
 
