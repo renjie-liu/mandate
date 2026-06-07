@@ -1,0 +1,85 @@
+# AgentImage — author-declared, publishable, signable.
+# No secrets, no real identity, no budgets — only requirements, requests, constraints.
+apiVersion: mandate/v1
+kind: AgentImage
+
+metadata:
+  name: research-assistant
+  version: 1.4.2
+  publisher: did:key:z6Mk...          # author DID -> signing / provenance
+
+llm:
+  # A capability requirement, NOT a hard model pin. Deployment binds a concrete model.
+  capability_class:
+    reasoning: high
+    tool_calling: required
+    structured_output: required
+    min_context_tokens: 128000
+    vision: optional
+  tested_on:
+    - anthropic/claude-opus-4-x
+    - openai/gpt-x
+
+loop:
+  strategy: react
+  constraints:                        # image-declared ceilings; cannot be loosened later
+    max_steps: 80
+    subagent_max_depth: 2
+    inherit: attenuate                # child caps subset of parent caps
+
+harness:
+  requires: { isolation: microvm, min_cpu: 1, min_memory: 2Gi }
+  recommends: { cpu: 2, memory: 4Gi }
+  execution:                          # replaces `timeout: unlimited`
+    mode: durable
+    persistence: pause_resume
+    active_runtime_limit: bounded
+  egress:                             # requested allow-list; runtime is deny-by-default
+    allow:
+      - api.semanticscholar.org
+      - arxiv.org
+  tools:
+    - ref: mcp:github
+      requests:
+        - capability: github.repo.read
+          resources: { repos: [acme/research] }
+          scope: { include_private: false }
+    - ref: mcp:filesystem
+      requests:
+        - capability: fs.workspace.rw
+
+identity:
+  persona:
+    system_prompt: ./prompts/researcher.md   # persona != principal
+  invocation:
+    default_acl:
+      invokable_by: [owner, owner-delegates]
+  asks:                               # citizen resources requested; bound at deploy time
+    secrets:
+      - name: SEMANTIC_SCHOLAR_KEY
+        purpose: semantic_scholar_api
+        required: true
+    inbox: { required: false, purpose: async_results }
+    payment: { required: false }
+
+memory:
+  volumes:                            # mounts, like a filesystem — authorized, not assumed
+    - name: project
+      mount: /memory/project
+      requested_access: { read: true, write: true }
+      scopes: [project.research, project.literature]
+      data_policy: { max_sensitivity: internal }
+    - name: user
+      mount: /memory/user
+      requested_access: { read: true, write: false }
+      scopes: [user.preferences]
+  writes:
+    require_provenance: true
+    require_fields: [source, source_trust, confidence, observed_at, owner, expiry]
+    long_term:
+      low_trust_source: review        # untrusted-origin writes held for consolidation review
+  retention:
+    default_ttl: 30d
+    pii: { long_term_write: approval, hard_delete_on_owner_request: true }
+  consistency: { mode: mvcc, conflict: escalate }
+  snapshots: { logical: true }

@@ -1,0 +1,61 @@
+# AgentDeployment — private. Binds an image to YOUR identity, secrets, budget, volumes,
+# and concrete model. Installing is granting: every grant must be a subset of a request.
+apiVersion: mandate/v1
+kind: AgentDeployment
+
+agents:
+  scout:
+    image: research-assistant:1.4.2@sha256:...   # pinned by digest (provenance)
+    tenant: acme-corp
+
+    grants:                                       # each must be subset of an image request
+      - capability: github.repo.read
+        resources: { repos: [acme/research] }
+        expires: 30d
+
+    llm_binding:                                  # image declared a class; deploy picks model
+      primary: anthropic/claude-opus-4-x
+      fallback:
+        strategy: same_or_higher_capability
+        allow_local: false
+
+    resources: { cpu: 2, memory: 4Gi }            # within image requires/recommends
+
+    identity:
+      principal: agent://acme/scout
+      invoked_by:
+        - user:alice@acme
+        - service:ci-bot
+      bindings:
+        secrets:
+          SEMANTIC_SCHOLAR_KEY: vault://acme/ss-key   # broker reference, never a value
+        inbox:
+          email: scout@agents.acme.com
+
+    budget:                                       # the seatbelt
+      tokens_per_day: 5000000
+      usd_per_day: 50
+      max_steps_per_run: 40
+      on_exceed: kill                             # kill | pause | escalate
+
+    timeouts:                                     # explicit; no "unlimited"
+      max_active_wall_time: 2h
+      max_session_duration: 7d
+      idle_timeout: 30m
+      approval_timeout: 24h
+
+    memory:
+      volume: vol://acme/scout-mem                # survives instance restarts
+      snapshot: { schedule: daily, retain: 7 }
+
+# Multi-agent composition + IPC policy (uncomment when a second agent exists).
+# topology:
+#   links:
+#     - from: scout
+#       to: writer
+#       channel: messages
+#       policy:
+#         data_labels_allowed: [public, internal]
+#         allow_tool_result_forwarding: false
+#         allow_secret_reference_forwarding: false
+#         require_provenance: true

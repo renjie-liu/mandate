@@ -1,0 +1,25 @@
+# OrgPolicy — tenant-wide guardrails applied to EVERY agent.
+# The compiler meets this with image constraints and deployment grants.
+# Policy decisions return an execution mode, not a boolean.
+apiVersion: mandate/v1
+kind: OrgPolicy
+
+defaults:
+  deny_external_egress: true          # no-bypass: egress is deny-by-default
+  require_secret_broker: true         # no tool may hold a usable credential
+  max_agent_usd_per_day: 50
+
+rules:
+  - match: { action: payment.* }
+    decision: require_manager_approval
+
+  - match: { data.labels: [pii], destination.external: true }
+    decision: deny
+
+  - match: { action: github.repo.write, resource.branch: main }
+    decision: require_code_owner_approval
+
+# decision is one of:
+#   allow | deny | allow_readonly | allow_draft_only | allow_with_redaction |
+#   allow_in_sandbox | require_human_approval | require_2fa | require_manager_approval |
+#   require_simulation_first | require_budget_increase
