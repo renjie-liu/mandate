@@ -44,6 +44,12 @@ harness:
         - capability: github.repo.read
           resources: { repos: [acme/research] }
           scope: { include_private: false }
+        - capability: github.repo.write          # write authority; policy gates how it lands
+          resources: { repos: [acme/research] }
+          data: { max_sensitivity: internal }
+    - ref: mcp:semantic-scholar                  # the one secret-bound tool
+      requests:
+        - capability: semantic_scholar.search    # needs SEMANTIC_SCHOLAR_KEY; egress allow-listed
     - ref: mcp:filesystem
       requests:
         - capability: fs.workspace.rw

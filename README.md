@@ -9,9 +9,12 @@ organization policy into an effective runtime **capability bundle**. Every tool 
 memory operation, credential use, IPC message, and budget charge crosses the same
 **syscall boundary** and is enforced under one agent identity.
 
-> **Status: design stage.** The kernel contract (`v0.2`) is defined and the P0 vertical
-> slice is specified. Implementation has not started — see [`ROADMAP.md`](./ROADMAP.md).
-> Expect the contract to change.
+> **Status: P0 implemented.** The kernel contract (`v0.2`) is defined and the P0 vertical
+> slice is built and tested — the compiler, the syscall gateway, policy execution-modes,
+> the budget kill-switch, the append-only audit log, broker-injected secrets, and
+> deny-by-default egress. Run the adversarial demo with `mandate demo` (see
+> [Quickstart](#quickstart)). See [`ROADMAP.md`](./ROADMAP.md) for what's next. Expect the
+> contract to keep changing.
 
 ---
 
@@ -79,22 +82,52 @@ Build (the wedge): the **manifest compiler**, the **capability runtime + syscall
 **capability-decision audit/replay**, and — later — the **identity-as-citizen wallet** and
 **cross-layer fork**. Full mapping in the [contract](./docs/mandate-kernel-contract-v0.2.md#13-build-vs-buy-corrected).
 
+## Quickstart
+
+```bash
+pip install -e ".[dev]"   # runtime dep is just PyYAML; [dev] adds pytest
+
+mandate demo              # run the six adversarial scenarios + audit dashboard
+mandate compile examples/research-assistant/agent.yaml \
+                examples/research-assistant/agent-compose.yaml \
+                --org-policy examples/research-assistant/org-policy.yaml
+
+pytest                    # compiler · kernel · no-bypass · end-to-end demo
+```
+
+`mandate demo` walks the contract's §14 demo. Each step is a syscall crossing the kernel:
+
+1. read `acme/research` → **allowed**, charged, audited
+2. write to a branch → **draft-only**; write to `main` → **code-owner approval**; nothing ships
+3. semantic-scholar search → API key **broker-injected server-side**, never in the result
+4. under simulated injection, the code tool tries to `curl` an unapproved host → **blocked by egress**
+5. memory write with no provenance → **rejected**; low-trust long-term → **held for review**
+6. over budget → **killed**; every later syscall is refused
+
+The whole run prints as an append-only, hash-chained audit table.
+
 ## Repo structure
 
 ```
 .
-├── README.md
-├── ROADMAP.md
+├── README.md · ROADMAP.md · pyproject.toml
 ├── docs/
 │   └── mandate-kernel-contract-v0.2.md   # the spec / contract
 ├── examples/
 │   └── research-assistant/               # the P0 demo agent
-│       ├── agent.yaml
-│       ├── agent-compose.yaml
-│       └── org-policy.yaml
-├── compiler/                             # (planned) manifest → capability bundle
-├── kernel/                               # (planned) syscall gateway + enforcement
-└── sdk/                                  # (planned) agent-facing syscall client
+│       ├── agent.yaml                    # AgentImage     (author)
+│       ├── agent-compose.yaml            # AgentDeployment (installer)
+│       ├── org-policy.yaml               # OrgPolicy       (org admin)
+│       ├── prompts/researcher.md         # persona (!= principal)
+│       └── demo.py                       # thin runner for the six scenarios
+├── src/mandate/
+│   ├── model/                            # capability algebra + manifest model
+│   ├── compiler/                         # manifests → effective capability bundle
+│   ├── kernel/                           # syscall gateway + enforcement subsystems
+│   ├── sdk/                              # agent-facing syscall client (the only way to act)
+│   ├── demo.py · dashboard.py · cli.py   # reference demo, audit view, `mandate` CLI
+│   └── errors.py
+└── tests/                                # pytest suite incl. an explicit no-bypass test
 ```
 
 ## License
