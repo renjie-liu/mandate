@@ -49,11 +49,11 @@ def _matches(match: dict[str, Any], ctx: dict[str, Any]) -> bool:
         elif key.endswith("_not_in"):
             # e.g. recipient.domain_not_in: [acme.com] — true when the value is absent.
             actual = _dig(ctx, key[: -len("_not_in")])
-            if actual in set(_as_list(expected)):
+            if str(actual) in _str_set(expected):
                 return False
         elif key == "data.labels":
-            present = set(_as_list(_dig(ctx, "data.labels")))
-            if not (set(_as_list(expected)) & present):
+            present = _str_set(_dig(ctx, "data.labels"))
+            if not (_str_set(expected) & present):
                 return False
         else:
             if not _match_value(expected, _dig(ctx, key)):
@@ -71,8 +71,8 @@ def _match_action(pattern: str, action: str) -> bool:
 
 def _match_value(expected: Any, actual: Any) -> bool:
     if isinstance(expected, list):
-        actual_set = set(_as_list(actual))
-        return bool(actual_set & set(expected)) if actual_set else actual in expected
+        actual_set = _str_set(actual)
+        return bool(actual_set & _str_set(expected)) if actual_set else str(actual) in _str_set(expected)
     return actual == expected
 
 
@@ -92,3 +92,14 @@ def _as_list(value: Any) -> list:
     if isinstance(value, (list, tuple, set)):
         return list(value)
     return [value]
+
+
+def _str_set(value: Any) -> set[str]:
+    """A set of the values, coerced to ``str``.
+
+    Policy matches on string-ish identifiers (actions, labels, branches, domains). Coercing
+    keeps the matcher *total* — it cannot raise on an unhashable element a hostile agent
+    slipped into a JSON payload (e.g. ``data_labels: [{...}]``); such input simply fails to
+    match, rather than escaping as an unaudited exception.
+    """
+    return {str(v) for v in _as_list(value)}

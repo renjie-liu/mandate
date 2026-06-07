@@ -8,12 +8,17 @@ pre-seed, and a result can only be what the kernel sent back over the pipe.
 """
 
 import gc
+import json
 import multiprocessing
+import os
+import pickle
+import tempfile
 from dataclasses import replace
 
 import pytest
 
 from mandate.demo import DEMO_SECRET_VALUE, DEMO_VAULT, build_bundle, build_tools, build_gateway
+from mandate.errors import MandateError
 from mandate.kernel import ProcessKernelService, SyscallGateway
 from mandate.model import Decision
 
@@ -21,6 +26,27 @@ pytestmark = pytest.mark.skipif(
     "fork" not in multiprocessing.get_all_start_methods(),
     reason="process isolation demo requires the fork start method",
 )
+
+
+# A would-be code-execution payload: if this object is ever *unpickled*, _touch_marker
+# runs. The JSON wire format means it is never unpickled in the kernel.
+_MARKER = os.path.join(tempfile.gettempdir(), f"mandate_rce_marker_{os.getpid()}")
+
+
+def _touch_marker(path):  # module-level so pickle can reference it
+    with open(path, "w") as handle:
+        handle.write("pwned")
+    return {}
+
+
+class _Evil:
+    def __reduce__(self):
+        return (_touch_marker, (_MARKER,))
+
+
+def _clear_marker():
+    if os.path.exists(_MARKER):
+        os.remove(_MARKER)
 
 
 def _tiny_budget_gateway():
@@ -123,22 +149,25 @@ def test_budget_kill_switch_works_across_the_boundary():
         assert service.killed() is True
 
 
-def _raw_roundtrip(agent, frame):
-    """Send an arbitrary raw frame on the agent pipe and read the kernel's reply."""
+def _raw_bytes_roundtrip(agent, raw: bytes):
+    """Put arbitrary raw bytes on the agent pipe and read the kernel's JSON reply (a dict)."""
     conn, lock = agent._channel._conn, agent._channel._lock
     with lock:
-        conn.send(frame)
+        conn.send_bytes(raw)
         assert conn.poll(5), "kernel did not reply to a raw frame"
-        return conn.recv()
+        return json.loads(conn.recv_bytes().decode("utf-8"))
+
+
+def _json_frame(syscall, payload):
+    return json.dumps({"op": "syscall", "syscall": syscall, "payload": payload}).encode("utf-8")
 
 
 def test_malformed_agent_frame_does_not_crash_the_kernel():
-    # The reviewer's exact repro: ("syscall", "tool.call", {}) lacks 'capability'/'name'.
+    # A syscall frame missing required fields ("tool.call" with an empty payload).
     with ProcessKernelService(build_gateway) as service:
         agent = service.client()
-        reply = _raw_roundtrip(agent, ("syscall", "tool.call", {}))
-        assert reply.status == "denied"  # untrusted input → denied, not a crash
-        assert "malformed payload" in reply.message
+        reply = _raw_bytes_roundtrip(agent, _json_frame("tool.call", {}))
+        assert reply["status"] == "denied"  # untrusted input → denied, not a crash
         assert service._proc.is_alive()
         # The kernel still serves a normal call.
         ok = agent.tool_call(
@@ -168,20 +197,75 @@ def test_tool_exception_is_audited_across_the_boundary():
 
 def test_assorted_malformed_frames_are_each_rejected_not_fatal():
     bad_frames = [
-        ("syscall", "memory.write", {"scope": "s"}),  # missing 'obj'
-        ("syscall", "bogus.syscall", {}),             # unknown syscall
-        ("syscall", "tool.call", "not-a-dict"),       # payload not a dict
-        ("syscall",),                                  # wrong arity
-        ("control", "audit"),                          # operator verb on the agent pipe
-        ("nope", 1, 2),                                # not a syscall frame
-        42,                                            # not even a tuple
+        _json_frame("memory.write", {"scope": "s"}),                       # missing 'obj'
+        _json_frame("bogus.syscall", {}),                                  # unknown syscall
+        _json_frame("tool.call", "not-a-dict"),                            # payload not an object
+        _json_frame("tool.call", {"capability": "x", "name": "y", "args": "bad"}),  # args not object
+        json.dumps({"op": "nope"}).encode("utf-8"),                        # not a syscall op
+        json.dumps(42).encode("utf-8"),                                    # top-level not an object
+        b"this is not json at all",                                        # unparseable bytes
+        pickle.dumps({"op": "syscall"}),                                   # raw pickle — must NOT be unpickled
     ]
     with ProcessKernelService(build_gateway) as service:
         agent = service.client()
-        for frame in bad_frames:
-            reply = _raw_roundtrip(agent, frame)
-            assert getattr(reply, "status", None) == "denied", frame
+        for raw in bad_frames:
+            reply = _raw_bytes_roundtrip(agent, raw)
+            assert reply["status"] == "denied", raw[:40]
         assert service._proc.is_alive()
         assert agent.tool_call(
             "github.repo.read", "github_repo_read", {}, resource={"repos": ["acme/research"]}
         ).status == "ok"
+
+
+def test_hostile_data_labels_are_rejected_at_the_boundary():
+    # data_labels with a non-string element is rejected at input validation, so it can
+    # never reach the policy matcher.
+    with ProcessKernelService(build_gateway) as service:
+        agent = service.client()
+        reply = _raw_bytes_roundtrip(agent, json.dumps({
+            "op": "syscall", "syscall": "tool.call",
+            "payload": {
+                "capability": "github.repo.read", "name": "github_repo_read",
+                "resource": {"repos": ["acme/research"]}, "data_labels": [{"x": 1}],
+            },
+        }).encode("utf-8"))
+        assert reply["status"] == "denied"
+        assert service._proc.is_alive()
+
+
+def test_malicious_object_in_args_never_crosses_the_boundary():
+    # The reviewer's exact attack path: a malicious object passed through the public API.
+    # JSON encoding rejects it in the *agent* process, so it is never serialized or sent.
+    _clear_marker()
+    try:
+        with ProcessKernelService(build_gateway) as service:
+            agent = service.client()
+            with pytest.raises(MandateError):
+                agent.tool_call(
+                    "github.repo.read", "github_repo_read",
+                    {"x": _Evil()}, resource={"repos": ["acme/research"]},
+                )
+            assert not os.path.exists(_MARKER)  # never serialized → never executed
+            assert service._proc.is_alive()
+    finally:
+        _clear_marker()
+
+
+def test_raw_pickle_bytes_on_the_agent_pipe_do_not_execute_code():
+    # Even bypassing the SDK and writing raw pickle bytes of a code-execution payload onto
+    # the pipe: the kernel does json.loads (never pickle.loads), so __reduce__ never runs.
+    _clear_marker()
+    try:
+        with ProcessKernelService(build_gateway) as service:
+            agent = service.client()
+            evil_pickle = pickle.dumps(_Evil())  # dumps calls __reduce__, not _touch_marker
+            assert not os.path.exists(_MARKER)
+            reply = _raw_bytes_roundtrip(agent, evil_pickle)
+            assert reply["status"] == "denied"   # rejected as unparseable JSON
+            assert not os.path.exists(_MARKER)    # the payload never executed in the kernel
+            assert service._proc.is_alive()
+            assert agent.tool_call(
+                "github.repo.read", "github_repo_read", {}, resource={"repos": ["acme/research"]}
+            ).status == "ok"
+    finally:
+        _clear_marker()

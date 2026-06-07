@@ -58,8 +58,11 @@ transports behind it:
 - **Process-isolated** (`ProcessKernelService`) — the real boundary (contract §2, §13). The
   kernel runs in a **separate process**; the agent holds only a pipe, so there is nothing
   to reach or pre-seed and a result can only be what the kernel sent back. A denied call is
-  observed as denied. Try it with `mandate demo --isolated`; P1 hardens this into a full
-  sandbox (E2B / Firecracker / gVisor).
+  observed as denied. The agent pipe carries **length-bounded JSON, never pickle**, and
+  every frame is schema- and type-validated, so untrusted agent bytes can only ever decode
+  to primitive data — they cannot construct an object or run code in the kernel, and a
+  malformed frame returns denied rather than crashing it. Try it with
+  `mandate demo --isolated`; P1 hardens this into a full sandbox (E2B / Firecracker / gVisor).
 
 In short: the SDK shape keeps the kernel unreachable; **isolation is the process/sandbox
 layer's job, not the SDK's** — exactly what the build-vs-buy table says to *use*, not build.

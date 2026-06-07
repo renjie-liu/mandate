@@ -281,11 +281,15 @@ def prove_isolation(emit: Callable[[str], None] | None = None) -> None:
     the secret never crosses back. The audit is fetched over a separate operator pipe the
     agent never holds.
     """
+    import multiprocessing
     import os
 
     from .kernel import ProcessKernelService
 
     say = emit or (lambda _msg: None)
+    if "fork" not in multiprocessing.get_all_start_methods():
+        say("\n(process isolation requires the 'fork' start method; not available here)")
+        return
     service = ProcessKernelService(build_gateway)
     try:
         agent = service.client()

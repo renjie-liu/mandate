@@ -59,6 +59,19 @@ def test_recipient_domain_not_in():
     assert internal is Decision.ALLOW
 
 
+def test_matcher_is_total_on_hostile_input():
+    # A hostile agent could put unhashable elements / nested objects in a JSON payload.
+    # The matcher must coerce and fail-to-match, never raise.
+    e = engine([{"match": {"data.labels": ["pii"]}, "decision": "deny"}])
+    assert e.decide("x", {"data": {"labels": [{"nested": 1}]}}) is Decision.ALLOW
+    assert e.decide("x", {"data": {"labels": "pii"}}) is Decision.DENY  # scalar coerced
+    e2 = engine([
+        {"match": {"action": "github.repo.write", "resource.branch": "main"}, "decision": "deny"},
+    ])
+    # A nested object where a scalar (branch) is expected must not crash.
+    assert e2.decide("github.repo.write", {"resource": {"branch": {"x": 1}}}) is Decision.ALLOW
+
+
 def test_decision_semantics_helpers():
     assert Decision.ALLOW_DRAFT_ONLY.is_draft
     assert Decision.ALLOW_DRAFT_ONLY.executes
