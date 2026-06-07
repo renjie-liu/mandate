@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Mandate Clean High-Level Architecture</title>
+  <desc id="desc">A clean high-level architecture diagram for Mandate: manifests compile delegated authority, the no-bypass kernel enforces it, and guarded resources are reached only through mediated side effects.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fbfaf7"/>
+      <stop offset="58%" stop-color="#f8fbff"/>
+      <stop offset="100%" stop-color="#fff8ed"/>
+    </linearGradient>
+
+    <linearGradient id="kernel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f2a5c"/>
+      <stop offset="100%" stop-color="#0f766e"/>
+    </linearGradient>
+
+    <filter id="shadow" x="-8%" y="-10%" width="116%" height="124%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#0f172a" flood-opacity="0.11"/>
+    </filter>
+
+    <filter id="softShadow" x="-8%" y="-10%" width="116%" height="124%">
+      <feDropShadow dx="0" dy="7" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.07"/>
+    </filter>
+
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#475569"/>
+    </marker>
+
+    <marker id="arrowTeal" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#0f766e"/>
+    </marker>
+
+    <style>
+      .font { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .title { font-size: 54px; font-weight: 820; fill: #111827; letter-spacing: 0; }
+      .subtitle { font-size: 22px; font-weight: 460; fill: #475569; letter-spacing: 0; }
+      .label { font-size: 13px; font-weight: 830; fill: #64748b; letter-spacing: 0.10em; text-transform: uppercase; }
+      .cardTitle { font-size: 26px; font-weight: 790; fill: #111827; letter-spacing: 0; }
+      .cardText { font-size: 17px; font-weight: 460; fill: #475569; letter-spacing: 0; }
+      .kernelTitle { font-size: 42px; font-weight: 840; fill: #ffffff; letter-spacing: 0; }
+      .kernelText { font-size: 20px; font-weight: 520; fill: #e6fffb; letter-spacing: 0; }
+      .pill { font-size: 14px; font-weight: 760; fill: #e0f2fe; letter-spacing: 0.06em; text-transform: uppercase; }
+      .resourceTitle { font-size: 23px; font-weight: 790; fill: #115e59; letter-spacing: 0; }
+      .resourceText { font-size: 15px; font-weight: 500; fill: #0f766e; letter-spacing: 0; }
+      .fine { font-size: 14px; font-weight: 720; fill: #64748b; letter-spacing: 0.04em; text-transform: uppercase; }
+      .line { fill: none; stroke: #475569; stroke-width: 2.5; marker-end: url(#arrow); }
+      .tealLine { fill: none; stroke: #0f766e; stroke-width: 3; marker-end: url(#arrowTeal); }
+      .hairline { fill: none; stroke: #d7dde6; stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+
+  <g class="font">
+    <text x="96" y="88" class="title">Mandate</text>
+    <text x="96" y="126" class="subtitle">A no-bypass trust layer for long-running AI agents.</text>
+    <path class="hairline" d="M96 166 H1504"/>
+
+    <!-- Vision / goal -->
+    <g filter="url(#softShadow)">
+      <rect x="96" y="210" width="660" height="124" rx="20" fill="#ffffff" stroke="#e2e8f0"/>
+      <text x="128" y="250" class="label">vision</text>
+      <text x="128" y="286" class="cardTitle">Agents as delegated actors</text>
+      <text x="128" y="316" class="cardText">LLM + harness + identity + memory, installable like infrastructure.</text>
+    </g>
+
+    <g filter="url(#softShadow)">
+      <rect x="844" y="210" width="660" height="124" rx="20" fill="#ffffff" stroke="#e2e8f0"/>
+      <text x="876" y="250" class="label">goal</text>
+      <text x="876" y="286" class="cardTitle">Compile authority. Enforce action.</text>
+      <text x="876" y="316" class="cardText">Every external effect is policy-checked, audited, and bounded.</text>
+    </g>
+
+    <!-- Build-time -->
+    <text x="96" y="418" class="label">build time</text>
+
+    <g filter="url(#softShadow)">
+      <rect x="96" y="448" width="336" height="140" rx="20" fill="#f6f2ea" stroke="#c8c0b4"/>
+      <text x="132" y="498" class="cardTitle">Agent Manifests</text>
+      <text x="132" y="530" class="cardText">image + deployment + policy</text>
+      <text x="132" y="558" class="cardText">authoring stays portable</text>
+    </g>
+
+    <g filter="url(#softShadow)">
+      <rect x="632" y="448" width="336" height="140" rx="20" fill="#ffffff" stroke="#d5dce7"/>
+      <text x="668" y="498" class="cardTitle">Capability Compiler</text>
+      <text x="668" y="530" class="cardText">intersects requests, grants,</text>
+      <text x="668" y="558" class="cardText">org policy, and runtime quota</text>
+    </g>
+
+    <g filter="url(#softShadow)">
+      <rect x="1168" y="448" width="336" height="140" rx="20" fill="#fffbea" stroke="#fde68a"/>
+      <text x="1204" y="498" class="cardTitle">Authority Bundle</text>
+      <text x="1204" y="530" class="cardText">the compiled runtime contract</text>
+      <text x="1204" y="558" class="cardText">loaded into the kernel</text>
+    </g>
+
+    <path class="line" d="M432 518 H632"/>
+    <path class="line" d="M968 518 H1168"/>
+    <text x="500" y="500" class="fine">compile</text>
+    <text x="1038" y="500" class="fine">bundle</text>
+
+    <!-- Runtime -->
+    <text x="96" y="684" class="label">runtime</text>
+
+    <g filter="url(#softShadow)">
+      <rect x="96" y="714" width="336" height="148" rx="22" fill="#ffffff" stroke="#d5dce7"/>
+      <text x="132" y="765" class="cardTitle">Sandboxed Agent</text>
+      <text x="132" y="797" class="cardText">can ask, plan, recall, and request</text>
+      <text x="132" y="825" class="cardText">but cannot directly act outside</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="540" y="688" width="520" height="200" rx="34" fill="url(#kernel)"/>
+      <text x="635" y="760" class="kernelTitle">No-Bypass Kernel</text>
+      <text x="620" y="800" class="kernelText">one mediated boundary for side effects</text>
+      <rect x="618" y="826" width="364" height="38" rx="19" fill="#ffffff" opacity="0.15"/>
+      <text x="652" y="851" class="pill">identity | policy | secrets | budget | audit</text>
+    </g>
+
+    <g filter="url(#softShadow)">
+      <rect x="1168" y="714" width="336" height="148" rx="22" fill="#eefaf6" stroke="#9fd1c3"/>
+      <text x="1204" y="765" class="resourceTitle">Guarded Resources</text>
+      <text x="1204" y="797" class="resourceText">tools, memory, credentials,</text>
+      <text x="1204" y="825" class="resourceText">network, IPC, and spend</text>
+    </g>
+
+    <path class="tealLine" d="M432 788 H540"/>
+    <path class="tealLine" d="M1060 788 H1168"/>
+    <text x="462" y="770" class="fine">syscalls</text>
+    <text x="1082" y="770" class="fine">mediated</text>
+
+    <path class="line" d="M1336 588 C1320 638, 1196 646, 1025 690"/>
+    <text x="1210" y="642" class="fine">loads</text>
+  </g>
+</svg>

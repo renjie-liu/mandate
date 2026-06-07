@@ -15,6 +15,33 @@ memory operation, credential use, IPC message, and budget charge crosses the sam
 
 ---
 
+## Vision
+
+Agents should be long-running delegated actors, not stateless chat loops. A real agent is
+an LLM plus a harness, identity, and memory: it can use tools, receive messages, hold
+credentials through a broker, remember across sessions, and act on behalf of a user or
+organization.
+
+Mandate makes that actor installable like infrastructure: publish an agent image, bind it
+to private identity and grants at deployment time, then run it under one auditable trust
+boundary.
+
+## Goal
+
+Build the runtime trust layer underneath agent manifests. Mandate should compile
+author-declared requirements, installer grants, organization policy, and runtime quota
+into one effective authority bundle, then enforce it at every side-effect boundary.
+
+The first goal is deliberately small: prove that a prompt-injected, non-cooperative agent
+cannot bypass the kernel to reach tools, memory, credentials, network egress, IPC, or
+budgeted spend.
+
+## Architecture
+
+![Mandate high-level architecture](./docs/mandate-architecture.svg)
+
+---
+
 ## Why
 
 Most projects in this space define *what an agent is* — a framework: prompt + tools + a
