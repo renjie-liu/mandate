@@ -15,10 +15,14 @@ from .memory import MemoryRecord, MemoryStore
 from .policy_engine import PolicyEngine
 from .syscalls import SyscallResult
 from .tools import Tool, ToolRegistry
+from .transport import KernelService, KernelWorker, SyscallChannel
 
 __all__ = [
     "SyscallGateway",
     "SyscallResult",
+    "KernelService",
+    "KernelWorker",
+    "SyscallChannel",
     "PolicyEngine",
     "BudgetMeter",
     "ChargeResult",

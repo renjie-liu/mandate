@@ -20,10 +20,14 @@ Prove the kernel, nothing more.
 
 > **What's real vs. simulated.** The compiler, capability algebra, gateway mediation,
 > policy/budget/audit, and the no-bypass *enforcement model* are real and tested
-> (`pytest`, incl. an explicit no-bypass test). The sandbox/egress boundary and the
-> credential broker are in-process simulations that prove the model end-to-end; P1+
-> swaps them for E2B/Firecracker and Infisical/Vault per the contract's build-vs-buy
-> table, behind the same syscall surface.
+> (`pytest`, incl. an explicit no-bypass test that walks the agent's reference graph).
+> The agent reaches the kernel only over a data-only syscall channel (a worker thread
+> standing in for the process boundary), so it holds no reference to any subsystem. The
+> sandbox/egress boundary and the credential broker are in-process simulations that prove
+> the model end-to-end; P1+ swaps the thread for a real process/sandbox and the broker for
+> Infisical/Vault per the contract's build-vs-buy table, behind the same syscall surface.
+> (In one process, `gc.get_objects()` can still enumerate anything — that residue is the
+> sandbox's job to remove, not the SDK's.)
 
 **The demo (adversarial step 4 is the point):**
 1. read repo → allowed, charged, audited

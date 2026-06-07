@@ -18,9 +18,8 @@ from typing import Callable
 
 from .compiler import compile_bundle, load_deployment, load_image, load_org_policy
 from .compiler.bundle import CapabilityBundle
-from .kernel import SyscallGateway, Tool, ToolRegistry
+from .kernel import KernelService, SyscallGateway, Tool, ToolRegistry
 from .kernel.syscalls import SyscallResult
-from .sdk import AgentClient
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "research-assistant"
 
@@ -127,8 +126,10 @@ def run(example_dir: Path = EXAMPLE_DIR, emit: Callable[[str], None] | None = No
     """Run all six scenarios and return their outcomes."""
     say = emit or (lambda _msg: None)
     bundle = build_bundle(example_dir)
-    gateway = build_gateway(bundle)
-    agent = AgentClient(gateway)
+    service = KernelService(build_gateway(bundle))
+    gateway = service.gateway
+    agent = service.client()
+    services = [service]
 
     out = DemoResult(bundle=bundle, gateway=gateway, budget_gateway=gateway)
 
@@ -240,9 +241,11 @@ def run(example_dir: Path = EXAMPLE_DIR, emit: Callable[[str], None] | None = No
     #    fires in a few steps instead of flooding the dashboard.
     say("\n6. budget kill switch (tiny budget so it trips fast)")
     tiny = replace(bundle, budget=replace(bundle.budget, max_steps_per_run=3, usd_per_day=0.05))
-    budget_gateway = SyscallGateway(tiny, tools=build_tools(), vault=DEMO_VAULT)
+    budget_service = KernelService(SyscallGateway(tiny, tools=build_tools(), vault=DEMO_VAULT))
+    budget_gateway = budget_service.gateway
     out.budget_gateway = budget_gateway
-    budget_agent = AgentClient(budget_gateway)
+    budget_agent = budget_service.client()
+    services.append(budget_service)
     step = 0
     while not budget_gateway.killed and step < 25:
         step += 1
@@ -263,6 +266,8 @@ def run(example_dir: Path = EXAMPLE_DIR, emit: Callable[[str], None] | None = No
         ),
     )
 
+    for active in services:
+        active.shutdown()
     say("")
     return out
 

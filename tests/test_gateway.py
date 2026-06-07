@@ -3,15 +3,15 @@
 from dataclasses import replace
 
 from mandate.demo import DEMO_SECRET_VALUE, DEMO_VAULT, build_bundle, build_tools
-from mandate.kernel import SyscallGateway
+from mandate.kernel import KernelService, SyscallGateway
 from mandate.model import Decision
-from mandate.sdk import AgentClient
 
 
 def fresh(bundle=None):
     bundle = bundle or build_bundle()
-    gw = SyscallGateway(bundle, tools=build_tools(), vault=DEMO_VAULT)
-    return gw, AgentClient(gw)
+    service = KernelService(SyscallGateway(bundle, tools=build_tools(), vault=DEMO_VAULT))
+    # The operator holds the gateway; the agent gets only a channel-bound client.
+    return service.gateway, service.client()
 
 
 def test_read_is_allowed_charged_and_audited():
