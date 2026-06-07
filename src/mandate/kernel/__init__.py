@@ -15,6 +15,7 @@ from .memory import MemoryRecord, MemoryStore
 from .policy_engine import PolicyEngine
 from .syscalls import SyscallResult
 from .tools import Tool, ToolRegistry
+from .process_transport import ProcessKernelService
 from .transport import (
     AgentEndpoint,
     KernelEndpoint,
@@ -28,6 +29,7 @@ __all__ = [
     "SyscallResult",
     "KernelService",
     "KernelWorker",
+    "ProcessKernelService",
     "AgentEndpoint",
     "KernelEndpoint",
     "make_channel",

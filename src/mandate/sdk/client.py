@@ -12,17 +12,23 @@ from ..model.subject import AgentKernelSubject
 class AgentClient:
     """What the agent harness holds. Every method crosses the kernel.
 
-    It holds an :class:`~mandate.kernel.transport.AgentEndpoint` (the agent end of a
-    data-only message channel) and the run's subject — and **nothing else**. There is no
-    reference, direct or transitive, from this object to the gateway, the broker, the
-    budget, the audit log, or the secret vault, and the endpoint has no response store or
-    response-posting method, so a call's result comes only from the kernel.
+    It holds a channel endpoint (the agent end of a data-only message channel) and the
+    run's subject — and **nothing else**. Across both transports, there is no reference,
+    direct or transitive, from this object to the gateway, the broker, the budget, the
+    audit log, or the secret vault.
 
-    This makes the no-bypass claim hold at the reference-graph level, and makes the result
-    the agent observes come only from the gateway (see the no-bypass tests). It does *not*
-    claim to defeat whole-interpreter introspection (``gc.get_objects()``) or the fact that
-    the agent can fabricate inert data objects in a shared process — that residue is the
-    sandbox/process boundary's job (contract §2), which the in-process P0 only simulates.
+    How strong "no bypass" is depends on the transport behind the channel:
+
+    * :class:`~mandate.kernel.transport.KernelService` (in-process) — a convenience for
+      tests and single-process use. It keeps the gateway/secret unreachable, but it is
+      **not an isolation boundary**: a determined in-process agent can reach the transport's
+      request queue and forge the result it *observes*, or just fabricate a ``SyscallResult``.
+      That is inert — every real effect is still kernel-mediated — but the observed result
+      is not guaranteed kernel-sourced.
+    * :class:`~mandate.kernel.process_transport.ProcessKernelService` — the real boundary
+      (contract §2/§13). The kernel runs in a separate process; the agent holds only a
+      pipe, so there is nothing to reach or pre-seed and a result can only be what the
+      kernel sent back. This is what P1 hardens into a full sandbox (E2B/Firecracker).
     """
 
     def __init__(self, channel: AgentEndpoint, subject: AgentKernelSubject) -> None:

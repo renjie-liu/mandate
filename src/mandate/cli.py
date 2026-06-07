@@ -34,6 +34,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_demo = sub.add_parser("demo", help="run the P0 adversarial demo + dashboard")
     p_demo.add_argument("--quiet", action="store_true", help="dashboard only, skip narration")
+    p_demo.add_argument(
+        "--isolated",
+        action="store_true",
+        help="also demonstrate the process-isolated kernel (the real no-bypass boundary)",
+    )
     p_demo.set_defaults(func=_cmd_demo)
 
     args = parser.parse_args(argv)
@@ -67,12 +72,14 @@ def _cmd_compile(args: argparse.Namespace) -> int:
 
 def _cmd_demo(args: argparse.Namespace) -> int:
     from .dashboard import render_for_gateway
-    from .demo import run
+    from .demo import prove_isolation, run
 
     result = run(emit=(None if args.quiet else print))
     print(render_for_gateway(result.gateway, result.bundle))
     print("\nKill-switch run (scenario 6, tiny budget):")
     print(render_for_gateway(result.budget_gateway, result.bundle))
+    if args.isolated:
+        prove_isolation(emit=print)
     return 0
 
 

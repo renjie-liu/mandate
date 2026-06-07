@@ -114,25 +114,25 @@ def test_client_constructed_only_from_a_channel_and_subject():
 def test_agent_endpoint_exposes_no_response_machinery():
     _, agent = agent_for()
     endpoint = agent._channel
-    # The kernel-side response store and mutator simply do not exist on the agent's end.
+    # The public verb is just send(); the prior round's pre-seed store/mutator are gone.
+    assert {n for n in dir(endpoint) if not n.startswith("_")} == {"send"}
     assert not hasattr(endpoint, "_responses")
     assert not hasattr(endpoint, "_put_response")
-    # Its only public verb is send().
-    assert {n for n in dir(endpoint) if not n.startswith("_")} == {"send"}
 
 
-def test_agent_cannot_forge_a_syscall_response():
-    # Reproduces the review exploit: there is no shared response store to pre-seed a forged
-    # "ok" for a call the gateway will deny. The result is the gateway's real verdict, and
-    # the kernel audits the real (denied) call — effects stay kernel-mediated.
+def test_in_process_transport_is_not_an_isolation_boundary():
+    # Honest scope. In one interpreter the agent endpoint necessarily holds a reachable
+    # request queue, so a determined agent can forge the result it *observes* (or simply
+    # fabricate a SyscallResult). That residual is exactly why isolation is the
+    # process/sandbox layer's job — see test_process_isolation for the boundary that
+    # forecloses it. What still holds in-process:
     gw, agent = agent_for()
-    endpoint = agent._channel
-    for attr in ("_responses", "_put_response"):
-        assert not hasattr(endpoint, attr)
+    #  (a) the residual is real — the request queue is reachable;
+    assert hasattr(agent._channel, "_requests")
+    #  (b) but effects stay kernel-mediated: a denied call is audited as denied;
     res = agent.tool_call("payment.send", "nope", resource={})
-    assert res.status == "denied"
-    assert res.decision is Decision.DENY
-    assert gw.audit.events[-1].status == "denied"
+    assert res.status == "denied" and gw.audit.events[-1].status == "denied"
+    #  (c) and the gateway/secret remain unreachable from the client (asserted above).
 
 
 def test_fabricated_result_objects_are_inert():

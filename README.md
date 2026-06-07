@@ -46,14 +46,23 @@ sees plaintext), and every side-effecting path is a syscall. A prompt-injected a
 *request* anything; it can only *act* through the kernel. This is the difference between
 Mandate and a cooperative SDK wrapper, and it is what the P0 demo proves adversarially.
 
-The agent talks to the kernel over a **data-only syscall channel** with split
-agent/kernel endpoints: the agent end holds no reference to the gateway, broker, budget,
-or secret vault (so no reference-graph path reaches a subsystem), and it has no response
-store to pre-seed — a call's result comes only from the kernel. The hard isolation
-boundary is the sandbox/process line (in production the agent runs *inside* the sandbox);
-P0 runs in one process and simulates that line, so it does not claim to defeat
-whole-interpreter introspection (`gc.get_objects()`) or the fact that the agent can
-fabricate inert data objects — that residue is precisely the sandbox's job, not the SDK's.
+The agent talks to the kernel over a **data-only syscall channel**, and Mandate ships two
+transports behind it:
+
+- **In-process** (`KernelService`) — convenient for tests/demos. The agent holds no
+  reference to the gateway, broker, budget, or secret vault, so no reference-graph path
+  reaches a subsystem. It is **not** an isolation boundary, though: sharing one interpreter,
+  the agent can forge the result it *observes* (or fabricate a `SyscallResult`). That is
+  **inert** — every real effect is still kernel-mediated and audited, so INV-1 holds — but
+  the observed result isn't guaranteed kernel-sourced.
+- **Process-isolated** (`ProcessKernelService`) — the real boundary (contract §2, §13). The
+  kernel runs in a **separate process**; the agent holds only a pipe, so there is nothing
+  to reach or pre-seed and a result can only be what the kernel sent back. A denied call is
+  observed as denied. Try it with `mandate demo --isolated`; P1 hardens this into a full
+  sandbox (E2B / Firecracker / gVisor).
+
+In short: the SDK shape keeps the kernel unreachable; **isolation is the process/sandbox
+layer's job, not the SDK's** — exactly what the build-vs-buy table says to *use*, not build.
 
 ## How it compiles
 
@@ -97,6 +106,7 @@ Build (the wedge): the **manifest compiler**, the **capability runtime + syscall
 pip install -e ".[dev]"   # runtime dep is just PyYAML; [dev] adds pytest
 
 mandate demo              # run the six adversarial scenarios + audit dashboard
+mandate demo --isolated   # also run the kernel in a separate process (the real boundary)
 mandate compile examples/research-assistant/agent.yaml \
                 examples/research-assistant/agent-compose.yaml \
                 --org-policy examples/research-assistant/org-policy.yaml

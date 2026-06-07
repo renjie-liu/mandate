@@ -1,22 +1,21 @@
-"""The syscall transport — the agent/kernel boundary made concrete (contract §2).
+"""The in-process syscall transport — a convenience, **not** an isolation boundary.
 
-The agent must reach the kernel only by sending plain-data syscall *messages* and
-receiving a result the **kernel** produced. Two things follow, and this module enforces
-both with the *shape* of what each side holds:
+This connects an agent to a gateway running on a worker thread in the *same* process. It
+buys one real, testable property:
 
-1. **No reference to the kernel.** The agent end holds only a request queue, never the
-   gateway/broker/budget/vault — so no walk of the agent's object graph reaches a
-   subsystem. (Whole-interpreter introspection — ``gc.get_objects()`` — can still
-   enumerate anything in one process; removing *that* is the sandbox's job, which P0
-   simulates with a worker thread standing in for the process boundary.)
+* **No reference to the kernel.** The agent end (:class:`AgentEndpoint`) holds only a
+  request queue, never the gateway/broker/budget/vault — so no walk of the agent's object
+  graph reaches a subsystem.
 
-2. **No way to forge a response.** The channel is split into an :class:`AgentEndpoint`
-   and a :class:`KernelEndpoint`. The agent end can submit a request and block for *its
-   own* reply, delivered through a fresh per-call reply box; there is **no shared response
-   store and no response-posting method on the agent's object**, so it cannot pre-seed or
-   overwrite what a call returns. (A clean-ABI guarantee, not a hard boundary: in one
-   interpreter the agent can always fabricate a ``SyscallResult`` value — but that is not a
-   syscall and causes nothing, because every real effect happens on the kernel side.)
+It does **not** make the result the agent observes unforgeable. In one interpreter the
+agent can reach the request queue, grab a pending call's reply box, and pre-fill it — or
+simply fabricate a :class:`SyscallResult`. Both are *inert*: every real effect (tool exec,
+egress, secret use, audit) still happens on the kernel side and is mediated and audited, so
+INV-1 holds. But response *integrity* — guaranteeing the observed result came from the
+kernel — and the residual heap-introspection paths require real isolation. That is the
+sandbox/process layer's job (contract §2, §13); see
+:class:`~mandate.kernel.process_transport.ProcessKernelService` for the boundary that
+actually forecloses both, and use this transport for fast single-process tests/demos.
 """
 
 from __future__ import annotations
@@ -142,11 +141,13 @@ class KernelWorker:
 
 
 class KernelService:
-    """Runs a gateway behind a channel and hands out agent clients.
+    """Runs a gateway behind an **in-process** channel and hands out agent clients.
 
     The *operator* holds the service (and through it the gateway, audit log, budget); the
-    *agent* is handed only a client bound to the agent endpoint. Use as a context manager,
-    or call :meth:`shutdown` to stop the worker.
+    *agent* is handed only a client bound to the agent endpoint. Convenient for tests and
+    single-process demos — but not an isolation boundary (see this module's docstring and
+    :class:`~mandate.kernel.process_transport.ProcessKernelService`). Use as a context
+    manager, or call :meth:`shutdown` to stop the worker.
     """
 
     def __init__(self, gateway: "SyscallGateway", *, timeout: float = _DEFAULT_TIMEOUT) -> None:

