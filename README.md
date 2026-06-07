@@ -36,6 +36,26 @@ The first goal is deliberately small: prove that a prompt-injected, non-cooperat
 cannot bypass the kernel to reach tools, memory, credentials, network egress, IPC, or
 budgeted spend.
 
+## What Mandate Provides
+
+Mandate is the operating substrate an agent workload needs before it can safely run for
+hours, days, or weeks:
+
+- **Multi-tenant isolation:** tenant-scoped identity, policy, memory, secrets, budget,
+  and audit.
+- **Multi-session runtime:** durable sessions that can pause, resume, snapshot, fork, and
+  be killed under quota.
+- **Agent-native memory:** short-term, long-term, and recallable memory with provenance,
+  permissions, retention, and deletion semantics.
+- **Keychain for agents:** credential handles and broker injection, so agents and tools
+  never hold plaintext secrets.
+- **Capability permissions:** static authority compiled from manifests, grants, org
+  policy, and runtime quota, checked at every syscall.
+- **Sandboxed execution:** deny-by-default egress and mediated tool/code execution so
+  prompt injection cannot route around the kernel.
+- **Auditable behavior:** every tool call, memory operation, credential use, IPC message,
+  approval, and budget charge is traceable and replayable.
+
 ## Architecture
 
 ![Mandate high-level architecture](./docs/mandate-architecture.svg)
