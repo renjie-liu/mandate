@@ -109,3 +109,48 @@ def test_budget_kill_switch_works_across_the_boundary():
         ]
         assert "killed" in statuses
         assert service.killed() is True
+
+
+def _raw_roundtrip(agent, frame):
+    """Send an arbitrary raw frame on the agent pipe and read the kernel's reply."""
+    conn, lock = agent._channel._conn, agent._channel._lock
+    with lock:
+        conn.send(frame)
+        assert conn.poll(5), "kernel did not reply to a raw frame"
+        return conn.recv()
+
+
+def test_malformed_agent_frame_does_not_crash_the_kernel():
+    # The reviewer's exact repro: ("syscall", "tool.call", {}) lacks 'capability'/'name'.
+    with ProcessKernelService(build_gateway) as service:
+        agent = service.client()
+        reply = _raw_roundtrip(agent, ("syscall", "tool.call", {}))
+        assert reply.status == "denied"  # untrusted input → denied, not a crash
+        assert "malformed payload" in reply.message
+        assert service._proc.is_alive()
+        # The kernel still serves a normal call.
+        ok = agent.tool_call(
+            "github.repo.read", "github_repo_read", {}, resource={"repos": ["acme/research"]}
+        )
+        assert ok.status == "ok"
+
+
+def test_assorted_malformed_frames_are_each_rejected_not_fatal():
+    bad_frames = [
+        ("syscall", "memory.write", {"scope": "s"}),  # missing 'obj'
+        ("syscall", "bogus.syscall", {}),             # unknown syscall
+        ("syscall", "tool.call", "not-a-dict"),       # payload not a dict
+        ("syscall",),                                  # wrong arity
+        ("control", "audit"),                          # operator verb on the agent pipe
+        ("nope", 1, 2),                                # not a syscall frame
+        42,                                            # not even a tuple
+    ]
+    with ProcessKernelService(build_gateway) as service:
+        agent = service.client()
+        for frame in bad_frames:
+            reply = _raw_roundtrip(agent, frame)
+            assert getattr(reply, "status", None) == "denied", frame
+        assert service._proc.is_alive()
+        assert agent.tool_call(
+            "github.repo.read", "github_repo_read", {}, resource={"repos": ["acme/research"]}
+        ).status == "ok"

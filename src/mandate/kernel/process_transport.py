@@ -16,7 +16,9 @@ attributes, not via ``gc.get_objects()``), and a result can only be what the ker
 back over the pipe. A denied call is observed as denied, full stop.
 
 The agent connection accepts *only* syscalls; operator inspection (audit, budget) flows on
-a separate control connection the agent never holds.
+a separate control connection the agent never holds. And because the agent owns its end of
+the pipe, every frame it sends is treated as **untrusted**: a malformed or non-syscall
+message comes back as a denied result, never an exception that could crash the kernel.
 """
 
 from __future__ import annotations
@@ -40,20 +42,31 @@ GatewayFactory = Callable[..., "SyscallGateway"]
 
 
 def _dispatch(gateway: "SyscallGateway", syscall: str, payload: dict[str, Any]) -> SyscallResult:
-    p = payload
-    if syscall == "tool.call":
-        return gateway.tool_call(
-            p["capability"], p["name"], p.get("args"),
-            resource=p.get("resource"), data_labels=p.get("data_labels"),
+    """Dispatch one (untrusted) agent frame. Never raises — malformed input → denied.
+
+    The payload arrives over the agent pipe and is not to be trusted: a missing field or a
+    tool/gateway error must come back as a denied result, never crash the kernel process.
+    """
+    try:
+        if syscall == "tool.call":
+            return gateway.tool_call(
+                payload["capability"], payload["name"], payload.get("args"),
+                resource=payload.get("resource"), data_labels=payload.get("data_labels"),
+            )
+        if syscall == "memory.write":
+            return gateway.memory_write(
+                payload["scope"], payload["obj"], payload.get("provenance"),
+                long_term=payload.get("long_term", False), data_labels=payload.get("data_labels"),
+            )
+        if syscall == "approval.request":
+            return gateway.approval_request(payload["action"], payload.get("context"))
+        return SyscallResult(syscall=syscall, status="denied", message=f"unknown syscall {syscall!r}")
+    except KeyError as exc:
+        return SyscallResult(
+            syscall=syscall, status="denied", message=f"malformed payload: missing {exc}"
         )
-    if syscall == "memory.write":
-        return gateway.memory_write(
-            p["scope"], p["obj"], p.get("provenance"),
-            long_term=p.get("long_term", False), data_labels=p.get("data_labels"),
-        )
-    if syscall == "approval.request":
-        return gateway.approval_request(p["action"], p.get("context"))
-    return SyscallResult(syscall=syscall, status="denied", message=f"unknown syscall {syscall!r}")
+    except Exception as exc:  # a tool/gateway bug must not take down the kernel process
+        return SyscallResult(syscall=syscall, status="denied", message=f"kernel error: {exc}")
 
 
 def _inspect(gateway: "SyscallGateway", what: str) -> Any:
@@ -79,28 +92,59 @@ def _serve(agent_conn, control_conn, factory: GatewayFactory, args: tuple) -> No
     open_conns = {agent_conn, control_conn}
     while open_conns:
         for conn in wait(list(open_conns)):
-            try:
-                message = conn.recv()
-            except EOFError:
-                open_conns.discard(conn)
-                continue
-            kind = message[0]
-            if kind == "stop":
-                open_conns.discard(conn)
-                continue
-            if conn is agent_conn and kind == "syscall":
-                _, syscall, payload = message
-                conn.send(_dispatch(gateway, syscall, payload))
-            elif conn is control_conn and kind == "inspect":
+            keep, reply = _serve_one(gateway, conn, conn is agent_conn)
+            if reply is not None:
                 try:
-                    conn.send(("ok", _inspect(gateway, message[1])))
-                except Exception as exc:  # pragma: no cover - defensive
-                    conn.send(("err", str(exc)))
-            else:
-                # The agent connection may ONLY issue syscalls; nothing else is honoured.
-                conn.send(
-                    SyscallResult(syscall="?", status="denied", message="channel not permitted")
+                    conn.send(reply)
+                except (OSError, ValueError):  # peer went away mid-reply
+                    keep = False
+            if not keep:
+                open_conns.discard(conn)
+                try:
+                    conn.close()
+                except OSError:  # pragma: no cover - defensive
+                    pass
+
+
+def _serve_one(gateway: "SyscallGateway", conn, is_agent: bool):
+    """Read and handle one **untrusted** frame. Returns ``(keep_open, reply_or_None)``.
+
+    Agent-pipe input is adversarial: any malformed frame yields a denied result (or, on the
+    operator control pipe, an error tuple) — never an exception that escapes and crashes the
+    kernel process. Corrupt framing drops just that one connection; the process keeps
+    serving the other.
+    """
+    try:
+        message = conn.recv()
+    except EOFError:
+        return False, None
+    except Exception:  # corrupt framing on this pipe — drop it, keep the process alive
+        return False, None
+    try:
+        if not isinstance(message, tuple) or not message:
+            raise ValueError("frame is not a non-empty tuple")
+        kind = message[0]
+        if kind == "stop":
+            return False, None
+        if is_agent:
+            # The agent connection may ONLY issue well-formed syscalls.
+            if kind != "syscall" or len(message) != 3 or not isinstance(message[2], dict):
+                return True, SyscallResult(
+                    syscall="?", status="denied", message="malformed syscall frame"
                 )
+            return True, _dispatch(gateway, str(message[1]), message[2])
+        if kind != "inspect" or len(message) != 2:
+            return True, ("err", "malformed control frame")
+        try:
+            return True, ("ok", _inspect(gateway, message[1]))
+        except Exception as exc:
+            return True, ("err", str(exc))
+    except Exception as exc:  # last-resort guard: a bad frame must never crash the loop
+        if is_agent:
+            return True, SyscallResult(
+                syscall="?", status="denied", message=f"kernel rejected frame: {exc}"
+            )
+        return True, ("err", f"kernel rejected frame: {exc}")
 
 
 # ---------------------------------------------------------------------------
